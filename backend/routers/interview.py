@@ -1,4 +1,4 @@
-"""API routes for Interview Copilot - structured resume/JD analysis (GLM-5),
+"""API routes for Interview Copilot - structured resume/JD analysis (Gemini Pro),
 streaming answer generation (Gemini Flash), session management, and Volcano STT proxy."""
 
 import os
@@ -15,10 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from services.interview_sessions import Interview_sessionsService
-from services.glm_structured_service import (
+from services.gemini_structured_service import (
     extract_resume_profile,
     extract_jd_profile,
     build_concise_context,
+    refine_structured_profile,
 )
 from services.gemini_flash_service import generate_answer_stream
 from services.file_parser_service import parse_file
@@ -85,11 +86,11 @@ class UpdateSessionRequest(BaseModel):
     title: str = ""
 
 
-# ─── Structured Resume / JD Analysis (GLM-5 + LangChain) ────────────
+# ─── Structured Resume / JD Analysis (Gemini Pro + LangChain) ────────
 
 @router.post("/analyze-structured")
 async def analyze_structured(request: AnalyzeTextRequest):
-    """Extract structured profile from resume or JD using GLM-5 with_structured_output.
+    """Extract structured profile from resume or JD using Gemini Pro with_structured_output.
     
     Returns both the full structured JSON and a concise context string
     optimized for Gemini Flash's context window.
@@ -114,59 +115,22 @@ async def analyze_structured(request: AnalyzeTextRequest):
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 
-# ─── Refine Analysis (multi-turn with GLM-5) ────────────────────────
+# ─── Refine Analysis (multi-turn with Gemini Pro) ───────────────────
 
 @router.post("/refine-analysis")
 async def refine_analysis(request: RefineAnalysisRequest):
-    """Refine a structured profile based on user feedback using GLM-5.
+    """Refine a structured profile based on user feedback using Gemini Pro.
     
     Accepts the current structured result and user's modification request,
     returns an updated structured profile. Supports multi-turn refinement.
     """
     try:
-        from services.glm_structured_service import _get_llm
-        from langchain_core.messages import SystemMessage, HumanMessage
-        import json as _json
-
-        llm = _get_llm()
-
-        if request.type == "resume":
-            from services.structured_schemas import ResumeProfile
-            schema_cls = ResumeProfile
-            role_desc = "resume analyst"
-        else:
-            from services.structured_schemas import JDProfile
-            schema_cls = JDProfile
-            role_desc = "job description analyst"
-
-        refiner = llm.with_structured_output(schema_cls)
-
-        lang_hint = ""
-        if request.language == "zh":
-            lang_hint = "\nPlease output all fields in Chinese (中文)."
-        elif request.language == "mixed":
-            lang_hint = "\nUse the original language of the content."
-
-        system_msg = (
-            f"You are an expert {role_desc}. The user has already analyzed a document "
-            f"and received a structured JSON result. Now the user wants to modify it. "
-            f"Apply the user's feedback to the current result and return an updated JSON object. "
-            f"Only change what the user asks for; keep everything else the same.{lang_hint}"
+        result = await refine_structured_profile(
+            current_structured=request.current_structured,
+            feedback=request.feedback,
+            doc_type=request.type,
+            language=request.language,
         )
-
-        user_msg = (
-            f"Current structured analysis result:\n"
-            f"```json\n{_json.dumps(request.current_structured, ensure_ascii=False, indent=2)}\n```\n\n"
-            f"User's modification request:\n{request.feedback}\n\n"
-            f"Please apply the modifications and return the updated JSON object."
-        )
-
-        messages = [
-            SystemMessage(content=system_msg),
-            HumanMessage(content=user_msg),
-        ]
-
-        result = await refiner.ainvoke(messages)
         concise = build_concise_context(
             resume=result if request.type == "resume" else None,
             jd=result if request.type == "jd" else None,

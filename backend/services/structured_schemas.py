@@ -1,4 +1,4 @@
-"""Pydantic schemas for structured resume and JD extraction via GLM-5."""
+"""Pydantic schemas for structured resume and JD extraction."""
 
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
