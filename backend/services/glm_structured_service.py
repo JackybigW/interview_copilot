@@ -4,11 +4,9 @@ Uses DashScope's OpenAI-compatible API with langchain-openai ChatOpenAI
 and .with_structured_output() for reliable structured extraction.
 """
 
-import json
 import os
 import logging
-import re
-from typing import Any, Union
+from typing import Union
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -43,188 +41,6 @@ def _get_llm() -> ChatOpenAI:
         temperature=0,  # Zero temperature for deterministic extraction
         max_tokens=4096,
     )
-
-
-def _dedupe_keep_order(items: list[str]) -> list[str]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for item in items:
-        normalized = item.strip()
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        result.append(normalized)
-    return result
-
-
-def _to_string_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, dict):
-        values: list[str] = []
-        for item in value.values():
-            values.extend(_to_string_list(item))
-        return values
-    if isinstance(value, list):
-        values: list[str] = []
-        for item in value:
-            values.extend(_to_string_list(item))
-        return values
-    return [str(value)]
-
-
-def _extract_json_block(text: str) -> dict[str, Any]:
-    """Extract the first JSON object from a raw LLM response."""
-    fenced_match = re.search(r"```json\s*(\{.*\})\s*```", text, flags=re.DOTALL)
-    candidate = fenced_match.group(1) if fenced_match else text.strip()
-    start = candidate.find("{")
-    end = candidate.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError("No JSON object found in LLM response")
-    return json.loads(candidate[start : end + 1])
-
-
-def _is_resume_profile_empty(profile: ResumeProfile) -> bool:
-    return not any(
-        [
-            profile.candidate_name,
-            profile.years_of_experience,
-            profile.technical_skills,
-            profile.soft_skills,
-            profile.projects,
-            profile.work_experiences,
-            profile.education,
-            profile.strongest_points,
-            profile.certifications,
-        ]
-    )
-
-
-def normalize_loose_resume_payload(payload: dict[str, Any]) -> ResumeProfile:
-    """Map loose Chinese-keyed resume JSON into the strict ResumeProfile schema."""
-    basic_info = payload.get("基本信息") or {}
-    skill_sections = payload.get("专业技能") or {}
-    work_entries = payload.get("工作经历") or []
-    project_entries = payload.get("项目经历") or []
-    education_entries = payload.get("教育经历") or []
-    tool_sections = payload.get("技术与工具") or {}
-
-    technical_skills: list[str] = []
-    soft_skills: list[str] = []
-
-    if isinstance(skill_sections, dict):
-        for key, value in skill_sections.items():
-            extracted_values = _to_string_list(value)
-            technical_skills.extend(extracted_values)
-            technical_skills.append(str(key))
-    else:
-        technical_skills.extend(_to_string_list(skill_sections))
-
-    if isinstance(tool_sections, dict):
-        for key, values in tool_sections.items():
-            technical_skills.append(str(key))
-            technical_skills.extend(_to_string_list(values))
-    else:
-        technical_skills.extend(_to_string_list(tool_sections))
-
-    for item in _to_string_list(skill_sections):
-        if any(token in item.lower() for token in ["雅思", "英语", "英文", "沟通", "communication"]):
-            soft_skills.append(item)
-
-    projects = []
-    for entry in project_entries:
-        if not isinstance(entry, dict):
-            continue
-        highlights = entry.get("项目内容") or entry.get("成果") or entry.get("亮点") or []
-        highlights = _to_string_list(highlights)
-        tech_stack = entry.get("技术栈") or entry.get("技术与工具") or []
-        tech_stack = _to_string_list(tech_stack)
-        projects.append(
-            {
-                "name": entry.get("项目名称") or entry.get("name") or "",
-                "role": entry.get("角色") or entry.get("role") or "",
-                "tech_stack": tech_stack,
-                "highlights": highlights,
-            }
-        )
-
-    work_experiences = []
-    for entry in work_entries:
-        if not isinstance(entry, dict):
-            continue
-        responsibilities = []
-        achievements = []
-        for item in entry.get("工作内容") or entry.get("职责与成果") or []:
-            if isinstance(item, dict):
-                role = str(item.get("职责") or "").strip()
-                detail = str(item.get("详情") or item.get("成果") or "").strip()
-                combined = "：".join(part for part in [role, detail] if part)
-                if combined:
-                    responsibilities.append(combined)
-                if any(token in combined for token in ["增长", "%", "提升", "降低", "控制", "GMV", "0-1", "落地"]):
-                    achievements.append(combined)
-            elif isinstance(item, str):
-                responsibilities.append(item)
-        work_experiences.append(
-            {
-                "company": entry.get("公司") or entry.get("company") or "",
-                "title": entry.get("职位") or entry.get("岗位") or "",
-                "duration": entry.get("时间") or entry.get("duration") or "",
-                "key_responsibilities": responsibilities,
-                "achievements": achievements or responsibilities[:2],
-            }
-        )
-
-    education = []
-    for entry in education_entries:
-        if isinstance(entry, dict):
-            parts = [entry.get("学校"), entry.get("专业") or entry.get("学位"), entry.get("时间"), entry.get("成就")]
-            education.append(" | ".join(str(part).strip() for part in parts if part))
-        elif isinstance(entry, str):
-            education.append(entry)
-
-    strongest_points = payload.get("个人优势") or payload.get("highlights") or []
-    if isinstance(strongest_points, str):
-        strongest_points = [strongest_points]
-
-    if isinstance(skill_sections, dict):
-        language_skill = skill_sections.get("语言能力")
-        soft_skills.extend(_to_string_list(language_skill))
-
-    return ResumeProfile(
-        candidate_name=basic_info.get("姓名") or basic_info.get("name") or "",
-        years_of_experience=basic_info.get("工作年限") or basic_info.get("年限") or "",
-        technical_skills=_dedupe_keep_order(technical_skills),
-        soft_skills=_dedupe_keep_order(soft_skills),
-        projects=projects,
-        work_experiences=work_experiences,
-        education=_dedupe_keep_order(education),
-        strongest_points=_dedupe_keep_order([str(item) for item in strongest_points]),
-        certifications=[],
-    )
-
-
-async def _fallback_extract_resume_profile(resume_text: str, language: str) -> ResumeProfile:
-    """Use a looser JSON prompt and normalize the result when schema parsing collapses."""
-    llm = _get_llm()
-    lang_hint = "请使用中文字段名输出 JSON。" if language == "zh" else "Return JSON only."
-    messages = [
-        SystemMessage(
-            content=(
-                "你是资深中文简历分析师。请从简历中提取真实信息，直接输出 JSON。"
-                "至少包含：基本信息、教育经历、专业技能、工作经历、项目经历、个人优势。"
-                "不要解释，不要输出除 JSON 外的内容。"
-                f"{lang_hint}"
-            )
-        ),
-        HumanMessage(content=f"请解析这份简历，输出结构化 JSON：\n\n{resume_text}"),
-    ]
-
-    raw_response = await llm.ainvoke(messages)
-    payload = _extract_json_block(raw_response.content if isinstance(raw_response.content, str) else str(raw_response.content))
-    return normalize_loose_resume_payload(payload)
 
 
 RESUME_SYSTEM_PROMPT = """You are an expert resume analyst. Your task is to extract structured information from a candidate's resume and return the result as a JSON object.
@@ -270,9 +86,6 @@ async def extract_resume_profile(resume_text: str, language: str = "en") -> Resu
 
     try:
         result = await resume_extractor.ainvoke(messages)
-        if _is_resume_profile_empty(result):
-            logger.warning("Resume structured output came back empty, switching to loose JSON fallback")
-            return await _fallback_extract_resume_profile(resume_text, language)
         return result
     except Exception as e:
         logger.error(f"Resume extraction error: {e}")
