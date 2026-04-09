@@ -105,7 +105,7 @@ def _is_empty_jd(profile: JDProfile) -> bool:
 
 def _render_raw_output(raw: object) -> str:
     if hasattr(raw, "model_dump_json"):
-        return raw.model_dump_json(indent=2, ensure_ascii=False)
+        return json.dumps(raw.model_dump(), ensure_ascii=False, indent=2, default=str)
     if hasattr(raw, "content"):
         content = raw.content
         if isinstance(content, str):
@@ -202,7 +202,7 @@ def test_gemini_pro_structured_output_live(schema_cls, doc_type, sample_text, is
     parsed, control_output = asyncio.run(_run())
 
     print(f"\n=== Parsed {schema_cls.__name__} ===")
-    print(parsed.model_dump_json(indent=2, ensure_ascii=False))
+    print(json.dumps(parsed.model_dump(), indent=2, ensure_ascii=False))
     print(f"\n=== Control Call Output ({schema_cls.__name__}) ===")
     print(_render_raw_output(control_output))
 

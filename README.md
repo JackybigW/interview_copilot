@@ -31,7 +31,7 @@ resume / jd / uploaded files
         ->
 FastAPI ingestion + parsing
         ->
-GLM-5 structured extraction
+Gemini Pro structured extraction
         ->
 concise interview context
         ->
@@ -67,8 +67,8 @@ operator-facing interview copilot UI
 
 ### Model / AI Layer
 
-- DashScope-compatible GLM-5 structured extraction
-- Google Gemini Flash generation
+- Gemini Pro structured extraction and iterative analysis refinement
+- Gemini Flash generation
 - Optional STT integrations for voice-driven workflows
 
 ## Local Run
