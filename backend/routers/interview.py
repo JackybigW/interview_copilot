@@ -1,12 +1,12 @@
-"""API routes for Interview Copilot - structured resume/JD analysis (Gemini Pro),
+"""API routes for Interview Copilot - structured resume/JD analysis (Gemini Flash),
 streaming answer generation (Gemini Flash), session management, and Volcano STT proxy."""
 
 import os
 import json
 import logging
 import asyncio
+import time
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import StreamingResponse
@@ -21,7 +21,7 @@ from services.gemini_structured_service import (
     build_concise_context,
     refine_structured_profile,
 )
-from services.gemini_flash_service import generate_answer_stream
+from services.gemini_flash_service import generate_answer_stream, GEMINI_FLASH_MODEL
 from services.file_parser_service import parse_file
 
 import websockets
@@ -86,11 +86,11 @@ class UpdateSessionRequest(BaseModel):
     title: str = ""
 
 
-# ─── Structured Resume / JD Analysis (Gemini Pro + LangChain) ────────
+# ─── Structured Resume / JD Analysis (Gemini Flash + LangChain) ────────
 
 @router.post("/analyze-structured")
 async def analyze_structured(request: AnalyzeTextRequest):
-    """Extract structured profile from resume or JD using Gemini Pro with_structured_output.
+    """Extract structured profile from resume or JD using Gemini Flash with_structured_output.
     
     Returns both the full structured JSON and a concise context string
     optimized for Gemini Flash's context window.
@@ -115,11 +115,11 @@ async def analyze_structured(request: AnalyzeTextRequest):
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 
-# ─── Refine Analysis (multi-turn with Gemini Pro) ───────────────────
+# ─── Refine Analysis (multi-turn with Gemini Flash) ───────────────────
 
 @router.post("/refine-analysis")
 async def refine_analysis(request: RefineAnalysisRequest):
-    """Refine a structured profile based on user feedback using Gemini Pro.
+    """Refine a structured profile based on user feedback using Gemini Flash.
     
     Accepts the current structured result and user's modification request,
     returns an updated structured profile. Supports multi-turn refinement.
@@ -192,8 +192,22 @@ async def generate_answer(request: GenerateAnswerRequest):
         if request.jd_context:
             context_parts.append(request.jd_context)
         context = "\n\n".join(context_parts)
+        question_chars = len(request.question)
+        context_chars = len(context)
+        transcript_chars = len(request.transcript_context)
+        logger.info(
+            "copilot_answer request_type=generate_answer model=%s question_chars=%d context_chars=%d transcript_chars=%d language=%s",
+            GEMINI_FLASH_MODEL,
+            question_chars,
+            context_chars,
+            transcript_chars,
+            request.language,
+        )
 
         async def generate():
+            start = time.perf_counter()
+            first_chunk_ms: float | None = None
+            chunk_count = 0
             try:
                 async for chunk in generate_answer_stream(
                     question=request.question,
@@ -201,11 +215,39 @@ async def generate_answer(request: GenerateAnswerRequest):
                     transcript_context=request.transcript_context,
                     language=request.language,
                 ):
+                    if first_chunk_ms is None:
+                        first_chunk_ms = (time.perf_counter() - start) * 1000
+                        logger.info(
+                            "copilot_answer first_chunk model=%s ttfc_ms=%.1f question_chars=%d context_chars=%d transcript_chars=%d",
+                            GEMINI_FLASH_MODEL,
+                            first_chunk_ms,
+                            question_chars,
+                            context_chars,
+                            transcript_chars,
+                        )
+                    chunk_count += 1
                     yield f"data: {chunk}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as e:
-                logger.error(f"Answer generation stream error: {e}")
+                logger.error(
+                    "copilot_answer stream_error model=%s ttfc_ms=%s error=%s",
+                    GEMINI_FLASH_MODEL,
+                    f"{first_chunk_ms:.1f}" if first_chunk_ms is not None else "n/a",
+                    e,
+                )
                 yield f"data: [ERROR] {str(e)}\n\n"
+            finally:
+                total_ms = (time.perf_counter() - start) * 1000
+                logger.info(
+                    "copilot_answer complete model=%s total_ms=%.1f ttfc_ms=%s chunks=%d question_chars=%d context_chars=%d transcript_chars=%d",
+                    GEMINI_FLASH_MODEL,
+                    total_ms,
+                    f"{first_chunk_ms:.1f}" if first_chunk_ms is not None else "n/a",
+                    chunk_count,
+                    question_chars,
+                    context_chars,
+                    transcript_chars,
+                )
 
         return StreamingResponse(
             generate(),

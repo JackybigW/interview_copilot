@@ -101,7 +101,7 @@ FastAPI backend
         ->
 
 structured extraction layer
-  - Gemini Pro
+  - Gemini Flash
   - typed Pydantic schemas
 
         ->
@@ -143,7 +143,7 @@ React operator surface
 
 ### AI Layer
 
-- Gemini Pro for structured resume / JD extraction and iterative analysis refinement
+- Gemini Flash for structured resume / JD extraction and iterative analysis refinement
 - Gemini Flash for live answer generation
 - optional Volcano / MiniMax STT integrations
 
@@ -185,7 +185,7 @@ GEMINI_API_KEY=your-google-ai-studio-key
 DATABASE_URL=sqlite+aiosqlite:///./interview_copilot.db
 ```
 
-`GOOGLE_API_KEY` is used for Gemini Pro structured extraction. `GEMINI_API_KEY` is used for Gemini Flash answer generation.
+`GOOGLE_API_KEY` is used for Gemini Flash structured extraction. `GEMINI_API_KEY` is used for Gemini Flash answer generation.
 
 ## What I’d Want A Technical Interviewer To Notice
 
