@@ -6,10 +6,11 @@ import pytest
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from services.glm_structured_service import JD_SYSTEM_PROMPT, RESUME_SYSTEM_PROMPT
 from services.structured_schemas import JDProfile, ResumeProfile
 
 
-MODEL_NAME = "gemini-3.1-pro-preview"
+MODEL_NAME = "gemini-3-pro-preview"
 
 RESUME_SAMPLE = """王子飏
 (Jacky)
@@ -89,6 +90,27 @@ def _render_raw_output(raw: object) -> str:
     return json.dumps(raw, ensure_ascii=False, indent=2, default=str)
 
 
+def _assert_resume_facts(profile: ResumeProfile) -> None:
+    assert profile.candidate_name and "王子飏" in profile.candidate_name
+    assert any(skill == "Python" for skill in profile.technical_skills)
+    assert any(skill == "LangChain" for skill in profile.technical_skills)
+    assert any("黄金数据集" in project.name for project in profile.projects)
+    assert any("暴叔讲留学" in work.company for work in profile.work_experiences)
+    assert any("智能体项目开发与数据评测治理" in work.title for work in profile.work_experiences)
+
+
+def _assert_jd_facts(profile: JDProfile) -> None:
+    assert profile.job_title and "大模型数据项目运营" in profile.job_title
+    assert any(skill == "Python" for skill in profile.required_skills)
+    assert any(skill == "SQL" for skill in profile.required_skills)
+    assert any(
+        "Prompt Engineering" in focus or "评测" in focus
+        for focus in profile.interview_focus_areas
+    )
+    assert any("本科" in req.description for req in profile.requirements)
+    assert any("1 年以上" in req.description or "1年以上" in req.description for req in profile.requirements)
+
+
 @pytest.mark.parametrize(
     ("schema_cls", "doc_type", "sample_text", "is_empty"),
     [
@@ -111,9 +133,23 @@ def test_gemini_pro_structured_output_live(schema_cls, doc_type, sample_text, is
             api_key=api_key,
             temperature=0,
         )
+        lang_hint = "\n\nPlease extract and output all fields in Chinese (中文)."
+        if doc_type == "resume":
+            system_content = RESUME_SYSTEM_PROMPT + lang_hint
+            human_content = (
+                "Please extract structured information from this resume and return it as a JSON object:\n\n"
+                f"{sample_text}"
+            )
+        else:
+            system_content = JD_SYSTEM_PROMPT + lang_hint
+            human_content = (
+                "Please extract structured information from this job description and return it as a JSON object:\n\n"
+                f"{sample_text}"
+            )
+
         messages = [
-            SystemMessage(content=f"Extract {doc_type} information and return valid JSON only."),
-            HumanMessage(content=sample_text),
+            SystemMessage(content=system_content),
+            HumanMessage(content=human_content),
         ]
 
         parsed = await llm.with_structured_output(schema_cls).ainvoke(messages)
@@ -128,3 +164,7 @@ def test_gemini_pro_structured_output_live(schema_cls, doc_type, sample_text, is
     print(_render_raw_output(raw))
 
     assert not is_empty(parsed), f"Gemini returned an effectively empty {schema_cls.__name__}."
+    if schema_cls is ResumeProfile:
+        _assert_resume_facts(parsed)
+    else:
+        _assert_jd_facts(parsed)
