@@ -2,10 +2,15 @@ import asyncio
 import json
 import os
 import re
+import sys
+from pathlib import Path
 
 import pytest
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage, SystemMessage
+
+# Allow direct pytest invocation without requiring PYTHONPATH=backend.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services.structured_schemas import JDProfile, ResumeProfile
 
