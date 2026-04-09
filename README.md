@@ -4,7 +4,7 @@ An opinionated AI interview copilot for high-signal technical prep and live inte
 
 Built as a full-stack system instead of a prompt toy:
 
-- `GLM-5 + structured schemas` for resume / JD parsing
+- `Gemini Pro + structured schemas` for resume / JD parsing
 - `Gemini Flash` for low-latency answer generation
 - `FastAPI + async SQLAlchemy` for the backend control plane
 - `React + Vite + TypeScript` for a fast local demo surface
@@ -31,7 +31,7 @@ resume / jd / uploaded files
         ->
 FastAPI ingestion + parsing
         ->
-GLM-5 structured extraction
+Gemini Pro structured extraction
         ->
 concise interview context
         ->
@@ -67,8 +67,8 @@ operator-facing interview copilot UI
 
 ### Model / AI Layer
 
-- DashScope-compatible GLM-5 structured extraction
-- Google Gemini Flash generation
+- Gemini Pro structured extraction and iterative analysis refinement
+- Gemini Flash generation
 - Optional STT integrations for voice-driven workflows
 
 ## Local Run
@@ -91,7 +91,7 @@ pip install -r requirements.txt
 uvicorn --env-file .env main:app --host 0.0.0.0 --port 8000
 ```
 
-See `guides/local-deployment-guide.md` for the full local setup notes.
+Create `backend/.env` with `GOOGLE_API_KEY` for Gemini Pro structured extraction, `GEMINI_API_KEY` for Gemini Flash answer generation, and `DATABASE_URL=sqlite+aiosqlite:///./interview_copilot.db` before starting the API.
 
 ## What I’d Highlight In A Tech Interview
 

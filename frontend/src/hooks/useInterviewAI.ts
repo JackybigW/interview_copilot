@@ -24,7 +24,7 @@ interface UseInterviewAIReturn {
  * Hook for AI-powered interview assistance using Gemini Flash streaming.
  * 
  * Uses the backend /generate-answer endpoint which calls Gemini Flash natively
- * for low-latency streaming responses. The context comes from GLM-5 structured
+ * for low-latency streaming responses. The context comes from structured
  * extraction (concise_context format).
  */
 export function useInterviewAI(): UseInterviewAIReturn {

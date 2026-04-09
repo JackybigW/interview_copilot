@@ -3,6 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { client } from '@/lib/api';
+import {
+  normalizeJDProfile,
+  normalizeResumeProfile,
+  resolveStructuredAnalysisResponse,
+  type JDProfile,
+  type ResumeProfile,
+} from '@/lib/analysis';
 import { getAPIBaseURL } from '@/lib/config';
 
 interface InterviewSession {
@@ -14,48 +21,6 @@ interface InterviewSession {
   created_at: string;
   resume_summary?: string;
   jd_summary?: string;
-}
-
-interface Project {
-  name: string;
-  role: string;
-  tech_stack: string[];
-  highlights: string[];
-}
-
-interface WorkExp {
-  company: string;
-  title: string;
-  duration: string;
-  key_responsibilities: string[];
-  achievements: string[];
-}
-
-interface ResumeProfile {
-  candidate_name: string;
-  years_of_experience: string;
-  technical_skills: string[];
-  soft_skills: string[];
-  projects: Project[];
-  work_experiences: WorkExp[];
-  education: string[];
-  strongest_points: string[];
-  certifications: string[];
-}
-
-interface JDProfile {
-  job_title: string;
-  company: string;
-  team: string;
-  level: string;
-  required_skills: string[];
-  preferred_skills: string[];
-  requirements: { description: string; is_required: boolean }[];
-  responsibilities: string[];
-  interview_focus_areas: string[];
-  keywords: string[];
-  tech_stack: string[];
-  years_experience_required: string;
 }
 
 interface ChatMessage {
@@ -499,7 +464,7 @@ export default function Workspace() {
 
     try {
       if (resumeText.trim()) {
-        setAnalyzeStep('Extracting resume profile with GLM-5...');
+        setAnalyzeStep('Extracting resume profile with Gemini Pro...');
         const resumeResp = await client.apiCall.invoke({
           url: '/api/v1/interview/analyze-structured',
           method: 'POST',
@@ -507,49 +472,28 @@ export default function Workspace() {
         });
         // SDK wraps in response.data; backend returns {structured, concise_context}
         const raw = resumeResp?.data;
-        const data = raw?.structured ? raw : raw?.data;
+        const data = resolveStructuredAnalysisResponse<ResumeProfile>(raw);
         console.log('[Analyze Resume] raw response:', JSON.stringify(raw));
         console.log('[Analyze Resume] resolved data:', JSON.stringify(data));
         if (data?.structured) {
-          const s = data.structured as ResumeProfile;
-          // Defensive defaults for all array fields
-          setResumeProfile({
-            ...s,
-            technical_skills: s.technical_skills || [],
-            soft_skills: s.soft_skills || [],
-            projects: s.projects || [],
-            work_experiences: s.work_experiences || [],
-            education: s.education || [],
-            strongest_points: s.strongest_points || [],
-            certifications: s.certifications || [],
-          });
+          setResumeProfile(normalizeResumeProfile(data.structured as ResumeProfile));
         }
         if (data?.concise_context) setResumeContext(data.concise_context);
       }
 
       if (jdText.trim()) {
-        setAnalyzeStep('Extracting JD profile with GLM-5...');
+        setAnalyzeStep('Extracting JD profile with Gemini Pro...');
         const jdResp = await client.apiCall.invoke({
           url: '/api/v1/interview/analyze-structured',
           method: 'POST',
           data: { text: jdText, type: 'jd', language },
         });
         const raw = jdResp?.data;
-        const data = raw?.structured ? raw : raw?.data;
+        const data = resolveStructuredAnalysisResponse<JDProfile>(raw);
         console.log('[Analyze JD] raw response:', JSON.stringify(raw));
         console.log('[Analyze JD] resolved data:', JSON.stringify(data));
         if (data?.structured) {
-          const s = data.structured as JDProfile;
-          setJdProfile({
-            ...s,
-            required_skills: s.required_skills || [],
-            preferred_skills: s.preferred_skills || [],
-            requirements: s.requirements || [],
-            responsibilities: s.responsibilities || [],
-            interview_focus_areas: s.interview_focus_areas || [],
-            keywords: s.keywords || [],
-            tech_stack: s.tech_stack || [],
-          });
+          setJdProfile(normalizeJDProfile(data.structured as JDProfile));
         }
         if (data?.concise_context) setJdContext(data.concise_context);
       }
@@ -607,34 +551,14 @@ export default function Workspace() {
       });
 
       const raw = resp?.data;
-      const data = raw?.structured ? raw : raw?.data;
+      const data = resolveStructuredAnalysisResponse<ResumeProfile | JDProfile>(raw);
       console.log('[Refine] raw response:', JSON.stringify(raw));
       if (data?.structured) {
         if (showRefineChat === 'resume') {
-          const s = data.structured as ResumeProfile;
-          setResumeProfile({
-            ...s,
-            technical_skills: s.technical_skills || [],
-            soft_skills: s.soft_skills || [],
-            projects: s.projects || [],
-            work_experiences: s.work_experiences || [],
-            education: s.education || [],
-            strongest_points: s.strongest_points || [],
-            certifications: s.certifications || [],
-          });
+          setResumeProfile(normalizeResumeProfile(data.structured as ResumeProfile));
           if (data.concise_context) setResumeContext(data.concise_context);
         } else {
-          const s = data.structured as JDProfile;
-          setJdProfile({
-            ...s,
-            required_skills: s.required_skills || [],
-            preferred_skills: s.preferred_skills || [],
-            requirements: s.requirements || [],
-            responsibilities: s.responsibilities || [],
-            interview_focus_areas: s.interview_focus_areas || [],
-            keywords: s.keywords || [],
-            tech_stack: s.tech_stack || [],
-          });
+          setJdProfile(normalizeJDProfile(data.structured as JDProfile));
           if (data.concise_context) setJdContext(data.concise_context);
         }
         setChatMessages(prev => [...prev, {
@@ -739,7 +663,7 @@ export default function Workspace() {
               Interview Copilot
             </h1>
             <p className="text-[11px] text-white/35 font-medium -mt-0.5">
-              GLM-5 · Gemini Flash · Volcano STT
+              Gemini Pro · Gemini Flash · Volcano STT
             </p>
           </div>
         </div>
@@ -949,7 +873,7 @@ export default function Workspace() {
                       <path d="M2 17l10 5 10-5" />
                       <path d="M2 12l10 5 10-5" />
                     </svg>
-                    {analysisReady ? 'Re-analyze with GLM-5' : 'Analyze with GLM-5'}
+                    {analysisReady ? 'Re-analyze with Gemini Pro' : 'Analyze with Gemini Pro'}
                   </span>
                 )}
               </Button>
@@ -1068,7 +992,7 @@ export default function Workspace() {
                           <div className="px-4 py-2.5 rounded-2xl bg-white/[0.04] border border-white/[0.06]">
                             <div className="flex items-center gap-2">
                               <div className="w-4 h-4 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
-                              <span className="text-[12px] text-white/40">GLM-5 is refining...</span>
+                              <span className="text-[12px] text-white/40">Gemini Pro is refining...</span>
                             </div>
                           </div>
                         </div>
@@ -1083,7 +1007,7 @@ export default function Workspace() {
                         value={chatInput}
                         onChange={(e) => setChatInput(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendRefine()}
-                        placeholder="Tell GLM-5 what to change..."
+                        placeholder="Tell Gemini Pro what to change..."
                         className="flex-1 px-4 py-3 rounded-xl bg-white/[0.03] border border-white/[0.08] text-white/90 placeholder:text-white/20 text-sm focus:outline-none focus:border-purple-500/40 focus:ring-1 focus:ring-purple-500/20 transition-all"
                         disabled={isRefining}
                       />

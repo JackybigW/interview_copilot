@@ -1,47 +1,18 @@
-"""GLM-5 structured output service using LangChain for resume/JD extraction.
+"""Gemini Pro structured extraction service using LangChain Google GenAI."""
 
-Uses DashScope's OpenAI-compatible API with langchain-openai ChatOpenAI
-and .with_structured_output() for reliable structured extraction.
-"""
-
-import os
+import json
 import logging
-from typing import Union
+import os
+from typing import Any
 
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage, SystemMessage
 
-from services.structured_schemas import ResumeProfile, JDProfile
+from services.structured_schemas import JDProfile, ResumeProfile
 
 logger = logging.getLogger(__name__)
 
-
-def _parse_env_value(raw: str, key_name: str) -> str:
-    """Parse environment variable value, handling cases where the value
-    contains the full KEY=VALUE format (e.g., 'DASHSCOPE_API_KEY=sk-xxx')."""
-    if raw.startswith(f"{key_name}="):
-        return raw[len(key_name) + 1:]
-    return raw
-
-
-def _get_llm() -> ChatOpenAI:
-    """Initialize GLM-5 via DashScope's OpenAI-compatible endpoint."""
-    raw_key = os.environ.get("DASHSCOPE_API_KEY", "")
-    raw_url = os.environ.get("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-
-    api_key = _parse_env_value(raw_key, "DASHSCOPE_API_KEY")
-    base_url = _parse_env_value(raw_url, "DASHSCOPE_BASE_URL")
-
-    logger.info(f"GLM-5 init: key starts with {api_key[:8]}..., base_url={base_url}")
-
-    return ChatOpenAI(
-        model="glm-5",
-        api_key=api_key,
-        base_url=base_url,
-        temperature=0,  # Zero temperature for deterministic extraction
-        max_tokens=4096,
-    )
-
+GEMINI_STRUCTURED_MODEL = os.getenv("GEMINI_STRUCTURED_MODEL", "gemini-3-pro-preview")
 
 RESUME_SYSTEM_PROMPT = """You are an expert resume analyst. Your task is to extract structured information from a candidate's resume and return the result as a JSON object.
 
@@ -68,52 +39,125 @@ Mark each requirement as required (is_required=true) or preferred (is_required=f
 You MUST respond with a valid JSON object matching the required schema."""
 
 
-async def extract_resume_profile(resume_text: str, language: str = "en") -> ResumeProfile:
-    """Extract structured profile from resume text using GLM-5 with structured output."""
-    llm = _get_llm()
-    resume_extractor = llm.with_structured_output(ResumeProfile)
+def _parse_env_value(raw: str, key_name: str) -> str:
+    """Handle env values accidentally pasted as KEY=VALUE."""
+    if raw.startswith(f"{key_name}="):
+        return raw[len(key_name) + 1:]
+    return raw
 
-    lang_hint = ""
+
+def _get_google_api_key() -> str:
+    raw_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY", "")
+    api_key = _parse_env_value(raw_key, "GOOGLE_API_KEY")
+    api_key = _parse_env_value(api_key, "GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("Missing GOOGLE_API_KEY for Gemini structured extraction.")
+    return api_key
+
+
+def _get_llm():
+    api_key = _get_google_api_key()
+    logger.info("Gemini structured init: model=%s key_prefix=%s", GEMINI_STRUCTURED_MODEL, api_key[:8])
+    return init_chat_model(
+        model=GEMINI_STRUCTURED_MODEL,
+        model_provider="google_genai",
+        api_key=api_key,
+        temperature=0,
+    )
+
+
+def _language_hint(language: str, source_kind: str) -> str:
     if language == "zh":
-        lang_hint = "\n\nPlease extract and output all fields in Chinese (中文)."
-    elif language == "mixed":
-        lang_hint = "\n\nExtract in the original language of the resume. Use Chinese for Chinese content and English for English content."
+        return "\n\nPlease extract and output all fields in Chinese (中文)."
+    if language == "mixed":
+        return (
+            f"\n\nExtract in the original language of the {source_kind}. "
+            "Use Chinese for Chinese content and English for English content."
+        )
+    return ""
 
+
+def _refinement_language_hint(language: str) -> str:
+    if language == "zh":
+        return "\nPlease output all fields in Chinese (中文)."
+    if language == "mixed":
+        return "\nUse the original language of the content."
+    return ""
+
+
+async def _invoke_structured_output(
+    *,
+    schema_cls: type[ResumeProfile] | type[JDProfile],
+    system_prompt: str,
+    user_prompt: str,
+):
+    llm = _get_llm()
+    structured_llm = llm.with_structured_output(schema_cls)
     messages = [
-        SystemMessage(content=RESUME_SYSTEM_PROMPT + lang_hint),
-        HumanMessage(content=f"Please extract structured information from this resume and return it as a JSON object:\n\n{resume_text}"),
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_prompt),
     ]
+    return await structured_llm.ainvoke(messages)
 
-    try:
-        result = await resume_extractor.ainvoke(messages)
-        return result
-    except Exception as e:
-        logger.error(f"Resume extraction error: {e}")
-        raise
+
+async def extract_resume_profile(resume_text: str, language: str = "en") -> ResumeProfile:
+    """Extract a structured resume profile with Gemini Pro."""
+    return await _invoke_structured_output(
+        schema_cls=ResumeProfile,
+        system_prompt=RESUME_SYSTEM_PROMPT + _language_hint(language, "resume"),
+        user_prompt=(
+            "Please extract structured information from this resume and return it as a JSON object:\n\n"
+            f"{resume_text}"
+        ),
+    )
 
 
 async def extract_jd_profile(jd_text: str, language: str = "en") -> JDProfile:
-    """Extract structured profile from JD text using GLM-5 with structured output."""
-    llm = _get_llm()
-    jd_extractor = llm.with_structured_output(JDProfile)
+    """Extract a structured JD profile with Gemini Pro."""
+    return await _invoke_structured_output(
+        schema_cls=JDProfile,
+        system_prompt=JD_SYSTEM_PROMPT + _language_hint(language, "JD"),
+        user_prompt=(
+            "Please extract structured information from this job description and return it as a JSON object:\n\n"
+            f"{jd_text}"
+        ),
+    )
 
-    lang_hint = ""
-    if language == "zh":
-        lang_hint = "\n\nPlease extract and output all fields in Chinese (中文)."
-    elif language == "mixed":
-        lang_hint = "\n\nExtract in the original language of the JD. Use Chinese for Chinese content and English for English content."
 
-    messages = [
-        SystemMessage(content=JD_SYSTEM_PROMPT + lang_hint),
-        HumanMessage(content=f"Please extract structured information from this job description and return it as a JSON object:\n\n{jd_text}"),
-    ]
+async def refine_structured_profile(
+    *,
+    current_structured: dict[str, Any],
+    feedback: str,
+    doc_type: str = "resume",
+    language: str = "en",
+) -> ResumeProfile | JDProfile:
+    """Refine an existing structured resume or JD profile using Gemini Pro."""
+    if doc_type == "resume":
+        schema_cls = ResumeProfile
+        role_desc = "resume analyst"
+    else:
+        schema_cls = JDProfile
+        role_desc = "job description analyst"
 
-    try:
-        result = await jd_extractor.ainvoke(messages)
-        return result
-    except Exception as e:
-        logger.error(f"JD extraction error: {e}")
-        raise
+    system_prompt = (
+        f"You are an expert {role_desc}. The user has already analyzed a document "
+        "and received a structured JSON result. Now the user wants to modify it. "
+        "Apply the user's feedback to the current result and return an updated JSON object. "
+        f"Only change what the user asks for; keep everything else the same.{_refinement_language_hint(language)}"
+    )
+    user_prompt = (
+        "Current structured analysis result:\n"
+        f"```json\n{json.dumps(current_structured, ensure_ascii=False, indent=2)}\n```\n\n"
+        "User's modification request:\n"
+        f"{feedback}\n\n"
+        "Please apply the modifications and return the updated JSON object."
+    )
+
+    return await _invoke_structured_output(
+        schema_cls=schema_cls,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
 
 
 def build_concise_context(
@@ -121,7 +165,7 @@ def build_concise_context(
     jd: JDProfile | None = None,
 ) -> str:
     """Build a concise context string from structured profiles for Gemini's context window.
-    
+
     This produces a compact, information-dense context that helps Gemini Flash
     generate relevant, personalized interview answers quickly.
     """
