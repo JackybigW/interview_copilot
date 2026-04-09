@@ -1,53 +1,128 @@
 # interview_copilot
 
-An opinionated AI interview copilot for high-signal technical prep and live interview assistance.
+An AI interview copilot built for one job: turn candidate context into better interview performance in real time.
 
-Built as a full-stack system instead of a prompt toy:
+Not a chatbot demo.
+Not a resume prettifier.
+Not a generic “answer generator”.
 
-- `Gemini Pro + structured schemas` for resume / JD parsing
-- `Gemini Flash` for low-latency answer generation
-- `FastAPI + async SQLAlchemy` for the backend control plane
-- `React + Vite + TypeScript` for a fast local demo surface
-- `Volcano / MiniMax STT` hooks for spoken interview workflows
+This project is a full-stack system that ingests messy candidate inputs, structures them into usable interview context, and uses that context to support live technical interview response generation.
 
-## Why This Exists
+## Product Thesis
 
-Most interview tools either:
+Most interview products fail for the same reason: they treat the interview as a standalone prompt.
 
-1. generate generic answers,
-2. ignore the candidate's actual background,
-3. or break down the moment the interaction becomes real-time.
+That misses the actual problem.
 
-`interview_copilot` is designed around a different loop:
+Interview quality is downstream of context quality.
 
-`resume + JD -> structured context -> interview signal -> grounded answer generation`
+If the system does not understand:
 
-The core bet is simple: if the system can compress candidate context and role context into a concise, reliable representation, then the live answer model can spend tokens on reasoning instead of reconstruction.
+- what the candidate has actually done,
+- what the role actually requires,
+- what signal the interviewer is trying to extract,
 
-## System Shape
+then the generated answer is usually high-fluency, low-value output.
+
+`interview_copilot` is built around a different loop:
 
 ```text
-resume / jd / uploaded files
+resume + jd + transcript
         ->
-FastAPI ingestion + parsing
+structured understanding
         ->
-Gemini Pro structured extraction
+compressed interview context
         ->
-concise interview context
-        ->
-real-time transcript / question detection
-        ->
-Gemini Flash response generation
-        ->
-operator-facing interview copilot UI
+live response generation
 ```
 
-## Demo Surface
+The bet is simple:
 
-- Workspace for resume / JD analysis
-- Interview page for live copilot interaction
-- Session persistence for replay and iteration
-- Local-first setup for rapid testing before deployment
+better context in -> better reasoning out.
+
+## What It Does
+
+### 1. Resume / JD understanding
+
+The system parses resumes and job descriptions into structured schemas instead of leaving them as raw text blobs.
+
+That makes the candidate profile operational:
+
+- skills become queryable
+- projects become explicit
+- experience becomes compressible
+- interview focus areas become derivable
+
+### 2. Context compression
+
+Structured data is converted into concise interview-ready context.
+
+This matters because live systems cannot afford to waste latency and tokens reconstructing background every turn.
+
+### 3. Live interview assistance
+
+During the interview loop, the app can consume transcript signal and generate grounded answers with the candidate and role already loaded into context.
+
+### 4. Session memory
+
+Interview sessions are persisted so flows can be replayed, inspected, and iterated on.
+
+## Why This Is Interesting
+
+This project is not just “LLM on top of a form”.
+
+It has a real system boundary between:
+
+- extraction
+- schema validation
+- context building
+- live generation
+- session persistence
+
+That separation is deliberate.
+
+It makes the stack easier to reason about, cheaper to evolve, and more robust when models or vendors change.
+
+## Architecture
+
+```text
+candidate inputs
+  - resume text / file
+  - job description
+  - live transcript
+
+        ->
+
+FastAPI backend
+  - upload / parsing
+  - orchestration
+  - session APIs
+
+        ->
+
+structured extraction layer
+  - Gemini Pro
+  - typed Pydantic schemas
+
+        ->
+
+context layer
+  - concise interview context
+  - candidate / role grounding
+
+        ->
+
+generation layer
+  - Gemini Flash
+  - live answer generation
+
+        ->
+
+React operator surface
+  - workspace
+  - interview session UI
+  - session history
+```
 
 ## Stack
 
@@ -56,20 +131,31 @@ operator-facing interview copilot UI
 - React 18
 - TypeScript
 - Vite
-- Tailwind + shadcn/ui
+- Tailwind
+- shadcn/ui
 
 ### Backend
 
 - FastAPI
-- SQLAlchemy async
+- async SQLAlchemy
 - SQLite for local dev
 - PostgreSQL-ready data layer
 
-### Model / AI Layer
+### AI Layer
 
-- Gemini Pro structured extraction and iterative analysis refinement
-- Gemini Flash generation
-- Optional STT integrations for voice-driven workflows
+- Gemini Pro for structured resume / JD extraction and iterative analysis refinement
+- Gemini Flash for live answer generation
+- optional Volcano / MiniMax STT integrations
+
+## Demo Story
+
+If I were demoing this in a final-round founder conversation, I would frame it like this:
+
+1. Raw candidate data is noisy.
+2. Interviews are high-pressure, low-latency environments.
+3. So the right abstraction is not “chat”, it is “context infrastructure for interview performance”.
+
+That is what this repo is trying to build.
 
 ## Local Run
 
@@ -91,15 +177,31 @@ pip install -r requirements.txt
 uvicorn --env-file .env main:app --host 0.0.0.0 --port 8000
 ```
 
-Create `backend/.env` with `GOOGLE_API_KEY` for Gemini Pro structured extraction, `GEMINI_API_KEY` for Gemini Flash answer generation, and `DATABASE_URL=sqlite+aiosqlite:///./interview_copilot.db` before starting the API.
+Create `backend/.env` with the current model keys before starting the API:
 
-## What I’d Highlight In A Tech Interview
+```env
+GOOGLE_API_KEY=your-google-ai-studio-key
+GEMINI_API_KEY=your-google-ai-studio-key
+DATABASE_URL=sqlite+aiosqlite:///./interview_copilot.db
+```
 
-- The product is not “just prompting”; it explicitly separates extraction, compression, and generation.
-- The backend is structured around typed schemas so model output is operationally usable.
-- The UX is optimized for latency and operator flow, not just static report generation.
-- The architecture leaves room for swapping models, STT vendors, and storage backends without rewriting the entire app.
+`GOOGLE_API_KEY` is used for Gemini Pro structured extraction. `GEMINI_API_KEY` is used for Gemini Flash answer generation.
 
-## Status
+## What I’d Want A Technical Interviewer To Notice
 
-Active prototype. Optimized for local demo, fast iteration, and architectural clarity.
+- The product framing is workflow-first, not model-first.
+- Structured extraction is treated as infrastructure, not UI garnish.
+- The system is built to reduce token waste and latency during live interaction.
+- The architecture is modular enough to swap models, prompts, or STT vendors without rewriting the whole application.
+- The candidate experience and operator experience are both part of the design surface.
+
+## Current Status
+
+Prototype, but with real product shape.
+
+Already useful as a demo of how to build a narrow AI workflow with:
+
+- typed intermediate representations
+- real-time assistance
+- model orchestration
+- local-first developer ergonomics
