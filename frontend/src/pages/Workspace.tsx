@@ -499,7 +499,7 @@ export default function Workspace() {
 
     try {
       if (resumeText.trim()) {
-        setAnalyzeStep('Extracting resume profile with GLM-5...');
+        setAnalyzeStep('Extracting resume profile with Gemini Pro...');
         const resumeResp = await client.apiCall.invoke({
           url: '/api/v1/interview/analyze-structured',
           method: 'POST',
@@ -528,7 +528,7 @@ export default function Workspace() {
       }
 
       if (jdText.trim()) {
-        setAnalyzeStep('Extracting JD profile with GLM-5...');
+        setAnalyzeStep('Extracting JD profile with Gemini Pro...');
         const jdResp = await client.apiCall.invoke({
           url: '/api/v1/interview/analyze-structured',
           method: 'POST',
@@ -739,7 +739,7 @@ export default function Workspace() {
               Interview Copilot
             </h1>
             <p className="text-[11px] text-white/35 font-medium -mt-0.5">
-              GLM-5 · Gemini Flash · Volcano STT
+              Gemini Pro · Gemini Flash · Volcano STT
             </p>
           </div>
         </div>
@@ -949,7 +949,7 @@ export default function Workspace() {
                       <path d="M2 17l10 5 10-5" />
                       <path d="M2 12l10 5 10-5" />
                     </svg>
-                    {analysisReady ? 'Re-analyze with GLM-5' : 'Analyze with GLM-5'}
+                    {analysisReady ? 'Re-analyze with Gemini Pro' : 'Analyze with Gemini Pro'}
                   </span>
                 )}
               </Button>
@@ -1068,7 +1068,7 @@ export default function Workspace() {
                           <div className="px-4 py-2.5 rounded-2xl bg-white/[0.04] border border-white/[0.06]">
                             <div className="flex items-center gap-2">
                               <div className="w-4 h-4 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
-                              <span className="text-[12px] text-white/40">GLM-5 is refining...</span>
+                              <span className="text-[12px] text-white/40">Gemini Pro is refining...</span>
                             </div>
                           </div>
                         </div>
@@ -1083,7 +1083,7 @@ export default function Workspace() {
                         value={chatInput}
                         onChange={(e) => setChatInput(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendRefine()}
-                        placeholder="Tell GLM-5 what to change..."
+                        placeholder="Tell Gemini Pro what to change..."
                         className="flex-1 px-4 py-3 rounded-xl bg-white/[0.03] border border-white/[0.08] text-white/90 placeholder:text-white/20 text-sm focus:outline-none focus:border-purple-500/40 focus:ring-1 focus:ring-purple-500/20 transition-all"
                         disabled={isRefining}
                       />
