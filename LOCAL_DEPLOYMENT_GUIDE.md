@@ -3,7 +3,7 @@
 ## 📋 项目概述
 
 Interview Copilot 是一个 AI 面试助手工具，包含以下核心功能：
-- **简历/JD 结构化分析**：使用 Gemini Pro + LangChain 进行结构化信息提取与分析修订
+- **简历/JD 结构化分析**：使用 Gemini Flash + LangChain 进行结构化信息提取与分析修订
 - **实时面试辅助**：使用 Gemini 3 Flash 进行流式回答生成
 - **语音识别**：支持火山引擎 STT 和 MiniMax STT
 - **文件上传**：支持 PDF、DOCX、MD、TXT 格式简历上传
@@ -25,7 +25,7 @@ frai/
 │   │   ├── storage.py       # 文件存储
 │   │   └── settings.py      # 设置管理
 │   ├── services/            # 业务逻辑层
-│   │   ├── gemini_structured_service.py # Gemini Pro 结构化提取
+│   │   ├── gemini_structured_service.py # Gemini Flash 结构化提取
 │   │   ├── structured_schemas.py       # Pydantic 数据模型
 │   │   ├── gemini_flash_service.py     # Gemini Flash 流式回答
 │   │   ├── gemini_service.py           # Gemini 音频理解
@@ -83,7 +83,7 @@ frai/
 
 | 环境变量 | 服务 | 用途 | 获取地址 |
 |---------|------|------|---------|
-| `GOOGLE_API_KEY` | Google AI Studio | Gemini Pro 结构化分析（简历/JD提取 + refine） | https://aistudio.google.com/apikey |
+| `GOOGLE_API_KEY` | Google AI Studio | Gemini Flash 结构化分析（简历/JD提取 + refine） | https://aistudio.google.com/apikey |
 | `GEMINI_API_KEY` | Google AI Studio | Gemini 3 Flash 流式回答 + 音频理解 | https://aistudio.google.com/apikey |
 
 ### 可选的 API Keys（按需配置）
@@ -115,7 +115,7 @@ touch .env
 
 ```env
 # ===== 必需 =====
-# Google Gemini Pro (结构化分析 + refine)
+# Google Gemini Flash (结构化分析 + refine)
 GOOGLE_API_KEY=your-google-ai-studio-key-here
 
 # Google Gemini (面试回答生成 + 音频理解)
@@ -159,7 +159,7 @@ pip install -r requirements.txt
 - `fastapi` + `uvicorn` — Web 框架
 - `sqlalchemy` + `asyncpg` + `aiosqlite` — 数据库 ORM（异步）
 - `alembic` — 数据库迁移
-- `langchain` + `langchain-core` + `langchain-google-genai` — Gemini Pro 结构化输出
+- `langchain` + `langchain-core` + `langchain-google-genai` — Gemini Flash 结构化输出
 - `google-genai` — Gemini Flash 原生调用
 - `pdfplumber` + `python-docx` — 文件解析
 - `openai` — OpenAI 兼容 API 调用
@@ -373,7 +373,7 @@ alembic upgrade head
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/v1/interview/analyze-structured` | Gemini Pro 结构化分析（简历/JD） |
+| POST | `/api/v1/interview/analyze-structured` | Gemini Flash 结构化分析（简历/JD） |
 | POST | `/api/v1/interview/refine-analysis` | 根据用户反馈修改分析结果 |
 | POST | `/api/v1/interview/upload-resume` | 上传简历文件（PDF/DOCX/MD/TXT） |
 | POST | `/api/v1/interview/generate-answer` | Gemini Flash 流式生成面试回答 |
@@ -409,8 +409,8 @@ alembic upgrade head
 ┌─────────────────────────────────────────────────────────┐
 │                    Workspace 页面                         │
 │                                                          │
-│  1. 上传/粘贴简历 ──→ Gemini Pro 结构化提取 ──→ ResumeProfile │
-│  2. 粘贴 JD ──────→ Gemini Pro 结构化提取 ──→ JDProfile       │
+│  1. 上传/粘贴简历 ──→ Gemini Flash 结构化提取 ──→ ResumeProfile │
+│  2. 粘贴 JD ──────→ Gemini Flash 结构化提取 ──→ JDProfile       │
 │  3. 查看分析结果 ──→ Confirm 或 Request Changes           │
 │  4. Confirm ──→ 生成 concise_context                     │
 │  5. Start Interview ──→ 跳转面试页面                      │
@@ -430,7 +430,7 @@ alembic upgrade head
 ```
 简历文本/文件 ──→ [后端] file_parser_service ──→ 纯文本
                           ↓
-                  gemini_structured_service (Gemini Pro + LangChain)
+                  gemini_structured_service (Gemini Flash + LangChain)
                           ↓
                   ResumeProfile (Pydantic 结构化数据)
                           ↓
@@ -445,7 +445,7 @@ alembic upgrade head
 
 ## 🐛 常见问题排查
 
-### 1. Gemini Pro 结构化分析返回空结果或报错
+### 1. Gemini Flash 结构化分析返回空结果或报错
 
 **检查 GOOGLE_API_KEY 是否正确：**
 ```bash
@@ -477,7 +477,7 @@ curl -s "https://generativelanguage.googleapis.com/v1beta/models?key=YOUR_GEMINI
 - 确认 Vite proxy 配置正确（`/api` → `http://localhost:8000`）
 - 检查浏览器控制台网络请求
 
-### 5. Pydantic 验证错误（Gemini Pro 返回嵌套对象）
+### 5. Pydantic 验证错误（Gemini Flash 返回嵌套对象）
 
 已在 `structured_schemas.py` 中添加了 `@field_validator` 自动处理。如果仍有问题，检查后端日志：
 ```bash
@@ -500,7 +500,7 @@ tail -100 backend/logs/app_*.log | grep -i "error\|validation"
 | **Python 运行时** | Python | 3.10+ |
 | **ORM** | SQLAlchemy (async) | 2.x |
 | **数据库** | SQLite (dev) / PostgreSQL (prod) | - |
-| **AI - 结构化分析** | Gemini Pro + LangChain Google GenAI | - |
+| **AI - 结构化分析** | Gemini Flash + LangChain Google GenAI | - |
 | **AI - 面试回答** | Gemini 3 Flash (google-genai) | - |
 | **AI - 音频理解** | Gemini 3 Flash (multimodal) | - |
 | **STT** | 火山引擎 / MiniMax | - |
@@ -590,7 +590,7 @@ CMD ["pnpm", "dev", "--host", "0.0.0.0"]
 - [ ] Node.js 18+ 已安装
 - [ ] pnpm 已安装 (`npm install -g pnpm`)
 - [ ] `backend/.env` 已创建并填入 API Keys
-- [ ] `GOOGLE_API_KEY` 已配置（Gemini Pro 分析必需）
+- [ ] `GOOGLE_API_KEY` 已配置（Gemini Flash 分析必需）
 - [ ] `GEMINI_API_KEY` 已配置（面试回答必需）
 - [ ] `DATABASE_URL` 已配置（SQLite 或 PostgreSQL）
 - [ ] 后端依赖已安装 (`pip install -r requirements.txt`)
