@@ -28,6 +28,14 @@ interface ChatMessage {
   content: string;
 }
 
+type AnalysisTarget = 'resume' | 'jd';
+type AnalysisStatus = 'idle' | 'loading' | 'done' | 'error';
+
+interface AnalysisProgressState {
+  resume: AnalysisStatus;
+  jd: AnalysisStatus;
+}
+
 // ─── Sub-components for analysis display ─────────────────────────────
 
 function TagList({ items, color }: { items: string[]; color: string }) {
@@ -66,6 +74,31 @@ function SectionTitle({ children, icon, color = 'white' }: { children: React.Rea
       {icon && <span>{icon}</span>}
       {children}
     </p>
+  );
+}
+
+function AnalysisPendingCard({ type }: { type: AnalysisTarget }) {
+  const isResume = type === 'resume';
+  const accentClass = isResume
+    ? 'border-purple-500/15 from-purple-500/[0.05] to-transparent text-purple-300'
+    : 'border-cyan-500/15 from-cyan-500/[0.05] to-transparent text-cyan-300';
+
+  return (
+    <div className={`rounded-2xl border bg-gradient-to-b p-6 backdrop-blur-sm ${accentClass}`}>
+      <div className="flex items-center gap-3">
+        <div className="w-8 h-8 rounded-xl bg-white/[0.04] flex items-center justify-center">
+          <span className="w-4 h-4 border-2 border-current/60 border-t-transparent rounded-full animate-spin" />
+        </div>
+        <div>
+          <p className="text-base font-bold">
+            {isResume ? 'Resume Analysis' : 'JD Analysis'}
+          </p>
+          <p className="text-xs text-white/40 mt-1">
+            {isResume ? 'Extracting resume profile with Gemini Flash...' : 'Extracting JD profile with Gemini Flash...'}
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -358,6 +391,10 @@ export default function Workspace() {
   const [jdContext, setJdContext] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analyzeStep, setAnalyzeStep] = useState('');
+  const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgressState>({
+    resume: 'idle',
+    jd: 'idle',
+  });
   const [sessions, setSessions] = useState<InterviewSession[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [activeTab, setActiveTab] = useState<'prepare' | 'history'>('prepare');
@@ -454,6 +491,58 @@ export default function Workspace() {
 
   const handleDragLeave = () => setIsDragOver(false);
 
+  const updateAnalyzeStep = useCallback((progress: AnalysisProgressState) => {
+    const loadingTargets = (Object.entries(progress) as Array<[AnalysisTarget, AnalysisStatus]>)
+      .filter(([, status]) => status === 'loading')
+      .map(([target]) => target);
+    const failedTargets = (Object.entries(progress) as Array<[AnalysisTarget, AnalysisStatus]>)
+      .filter(([, status]) => status === 'error')
+      .map(([target]) => target);
+    const finishedTargets = (Object.entries(progress) as Array<[AnalysisTarget, AnalysisStatus]>)
+      .filter(([, status]) => status === 'done')
+      .map(([target]) => target);
+
+    const formatLabel = (target: AnalysisTarget) => target === 'resume' ? 'resume' : 'JD';
+
+    if (loadingTargets.length === 2) {
+      setAnalyzeStep('Extracting resume and JD with Gemini Flash...');
+      return;
+    }
+
+    if (loadingTargets.length === 1 && finishedTargets.length === 1) {
+      setAnalyzeStep(
+        `${formatLabel(finishedTargets[0])} ready. Extracting ${formatLabel(loadingTargets[0])} with Gemini Flash...`,
+      );
+      return;
+    }
+
+    if (loadingTargets.length === 1) {
+      setAnalyzeStep(`Extracting ${formatLabel(loadingTargets[0])} profile with Gemini Flash...`);
+      return;
+    }
+
+    if (failedTargets.length > 0) {
+      const label = failedTargets.map(formatLabel).join(' and ');
+      const hasFinished = finishedTargets.length > 0;
+      setAnalyzeStep(
+        hasFinished
+          ? `${label} analysis failed. Completed results are shown below.`
+          : `${label} analysis failed. Please try again.`,
+      );
+      return;
+    }
+
+    setAnalyzeStep('');
+  }, []);
+
+  const setProgressState = useCallback((target: AnalysisTarget, status: AnalysisStatus) => {
+    setAnalysisProgress((current) => {
+      const next = { ...current, [target]: status };
+      updateAnalyzeStep(next);
+      return next;
+    });
+  }, [updateAnalyzeStep]);
+
   // Analyze resume and JD with structured output
   const handleAnalyze = async () => {
     if (!resumeText.trim() && !jdText.trim()) return;
@@ -461,47 +550,77 @@ export default function Workspace() {
     setIsConfirmed(false);
     setShowRefineChat(null);
     setChatMessages([]);
+    setAnalyzeStep('');
 
-    try {
-      if (resumeText.trim()) {
-        setAnalyzeStep('Extracting resume profile with Gemini Pro...');
-        const resumeResp = await client.apiCall.invoke({
+    const nextProgress: AnalysisProgressState = {
+      resume: resumeText.trim() ? 'loading' : 'idle',
+      jd: jdText.trim() ? 'loading' : 'idle',
+    };
+    setAnalysisProgress(nextProgress);
+    updateAnalyzeStep(nextProgress);
+
+    if (resumeText.trim()) {
+      setResumeProfile(null);
+      setResumeContext('');
+    }
+    if (jdText.trim()) {
+      setJdProfile(null);
+      setJdContext('');
+    }
+
+    const tasks: Promise<void>[] = [];
+
+    if (resumeText.trim()) {
+      tasks.push((async () => {
+        try {
+          const resumeResp = await client.apiCall.invoke({
           url: '/api/v1/interview/analyze-structured',
           method: 'POST',
           data: { text: resumeText, type: 'resume', language },
         });
-        // SDK wraps in response.data; backend returns {structured, concise_context}
-        const raw = resumeResp?.data;
-        const data = resolveStructuredAnalysisResponse<ResumeProfile>(raw);
-        console.log('[Analyze Resume] raw response:', JSON.stringify(raw));
-        console.log('[Analyze Resume] resolved data:', JSON.stringify(data));
-        if (data?.structured) {
-          setResumeProfile(normalizeResumeProfile(data.structured as ResumeProfile));
+          // SDK wraps in response.data; backend returns {structured, concise_context}
+          const raw = resumeResp?.data;
+          const data = resolveStructuredAnalysisResponse<ResumeProfile>(raw);
+          console.log('[Analyze Resume] raw response:', JSON.stringify(raw));
+          console.log('[Analyze Resume] resolved data:', JSON.stringify(data));
+          if (data?.structured) {
+            setResumeProfile(normalizeResumeProfile(data.structured as ResumeProfile));
+          }
+          if (data?.concise_context) setResumeContext(data.concise_context);
+          setProgressState('resume', 'done');
+        } catch (err) {
+          console.error('Resume analysis error:', err);
+          setProgressState('resume', 'error');
         }
-        if (data?.concise_context) setResumeContext(data.concise_context);
-      }
+      })());
+    }
 
-      if (jdText.trim()) {
-        setAnalyzeStep('Extracting JD profile with Gemini Pro...');
-        const jdResp = await client.apiCall.invoke({
+    if (jdText.trim()) {
+      tasks.push((async () => {
+        try {
+          const jdResp = await client.apiCall.invoke({
           url: '/api/v1/interview/analyze-structured',
           method: 'POST',
           data: { text: jdText, type: 'jd', language },
         });
-        const raw = jdResp?.data;
-        const data = resolveStructuredAnalysisResponse<JDProfile>(raw);
-        console.log('[Analyze JD] raw response:', JSON.stringify(raw));
-        console.log('[Analyze JD] resolved data:', JSON.stringify(data));
-        if (data?.structured) {
-          setJdProfile(normalizeJDProfile(data.structured as JDProfile));
+          const raw = jdResp?.data;
+          const data = resolveStructuredAnalysisResponse<JDProfile>(raw);
+          console.log('[Analyze JD] raw response:', JSON.stringify(raw));
+          console.log('[Analyze JD] resolved data:', JSON.stringify(data));
+          if (data?.structured) {
+            setJdProfile(normalizeJDProfile(data.structured as JDProfile));
+          }
+          if (data?.concise_context) setJdContext(data.concise_context);
+          setProgressState('jd', 'done');
+        } catch (err) {
+          console.error('JD analysis error:', err);
+          setProgressState('jd', 'error');
         }
-        if (data?.concise_context) setJdContext(data.concise_context);
-      }
+      })());
+    }
 
-      setAnalyzeStep('');
-    } catch (err) {
-      console.error('Analysis error:', err);
-      setAnalyzeStep('Analysis failed. Please try again.');
+    try {
+      await Promise.all(tasks);
     } finally {
       setIsAnalyzing(false);
     }
@@ -636,6 +755,7 @@ export default function Workspace() {
   };
 
   const analysisReady = !!(resumeProfile || jdProfile);
+  const showAnalysisSection = analysisReady || isAnalyzing;
 
   return (
     <div className="min-h-screen bg-[#07070A] text-white flex flex-col">
@@ -663,7 +783,7 @@ export default function Workspace() {
               Interview Copilot
             </h1>
             <p className="text-[11px] text-white/35 font-medium -mt-0.5">
-              Gemini Pro · Gemini Flash · Volcano STT
+              Gemini Flash Analysis · Gemini Flash Copilot · Volcano STT
             </p>
           </div>
         </div>
@@ -873,7 +993,7 @@ export default function Workspace() {
                       <path d="M2 17l10 5 10-5" />
                       <path d="M2 12l10 5 10-5" />
                     </svg>
-                    {analysisReady ? 'Re-analyze with Gemini Pro' : 'Analyze with Gemini Pro'}
+                    {analysisReady ? 'Re-analyze with Gemini Flash' : 'Analyze with Gemini Flash'}
                   </span>
                 )}
               </Button>
@@ -896,16 +1016,18 @@ export default function Workspace() {
             </div>
 
             {/* ─── Analysis Results + Confirm/Refine ─────────────────────── */}
-            {analysisReady && (
+            {showAnalysisSection && (
               <div className="space-y-6">
                 {/* Analysis Cards */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   {resumeProfile && <ResumeCard profile={resumeProfile} />}
+                  {!resumeProfile && analysisProgress.resume === 'loading' && <AnalysisPendingCard type="resume" />}
                   {jdProfile && <JDCard profile={jdProfile} />}
+                  {!jdProfile && analysisProgress.jd === 'loading' && <AnalysisPendingCard type="jd" />}
                 </div>
 
                 {/* Confirm / Request Changes Buttons */}
-                {!isConfirmed && (
+                {analysisReady && !isConfirmed && (
                   <div className="flex items-center justify-center gap-4 py-2">
                     <Button
                       onClick={handleConfirm}
@@ -992,7 +1114,7 @@ export default function Workspace() {
                           <div className="px-4 py-2.5 rounded-2xl bg-white/[0.04] border border-white/[0.06]">
                             <div className="flex items-center gap-2">
                               <div className="w-4 h-4 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
-                              <span className="text-[12px] text-white/40">Gemini Pro is refining...</span>
+                              <span className="text-[12px] text-white/40">Gemini Flash is refining...</span>
                             </div>
                           </div>
                         </div>
@@ -1007,7 +1129,7 @@ export default function Workspace() {
                         value={chatInput}
                         onChange={(e) => setChatInput(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendRefine()}
-                        placeholder="Tell Gemini Pro what to change..."
+                        placeholder="Tell Gemini Flash what to change..."
                         className="flex-1 px-4 py-3 rounded-xl bg-white/[0.03] border border-white/[0.08] text-white/90 placeholder:text-white/20 text-sm focus:outline-none focus:border-purple-500/40 focus:ring-1 focus:ring-purple-500/20 transition-all"
                         disabled={isRefining}
                       />

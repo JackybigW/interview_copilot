@@ -1,8 +1,10 @@
-"""Gemini Pro structured extraction service using LangChain Google GenAI."""
+"""Gemini Flash structured extraction service using LangChain Google GenAI."""
 
 import json
 import logging
 import os
+import time
+from functools import lru_cache
 from typing import Any
 
 from langchain.chat_models import init_chat_model
@@ -12,7 +14,11 @@ from services.structured_schemas import JDProfile, ResumeProfile
 
 logger = logging.getLogger(__name__)
 
-GEMINI_STRUCTURED_MODEL = os.getenv("GEMINI_STRUCTURED_MODEL", "gemini-3-pro-preview")
+DEFAULT_GEMINI_STRUCTURED_MODEL = "gemini-3-flash-preview"
+
+
+def _get_structured_model() -> str:
+    return os.getenv("GEMINI_STRUCTURED_MODEL", DEFAULT_GEMINI_STRUCTURED_MODEL)
 
 RESUME_SYSTEM_PROMPT = """You are an expert resume analyst. Your task is to extract structured information from a candidate's resume and return the result as a JSON object.
 
@@ -55,15 +61,20 @@ def _get_google_api_key() -> str:
     return api_key
 
 
-def _get_llm():
-    api_key = _get_google_api_key()
-    logger.info("Gemini structured init: model=%s key_prefix=%s", GEMINI_STRUCTURED_MODEL, api_key[:8])
+@lru_cache(maxsize=8)
+def _get_llm_cached(model_name: str, api_key: str):
+    logger.info("Gemini structured init: model=%s key_prefix=%s", model_name, api_key[:8])
     return init_chat_model(
-        model=GEMINI_STRUCTURED_MODEL,
+        model=model_name,
         model_provider="google_genai",
         api_key=api_key,
         temperature=0,
     )
+
+
+def _get_llm():
+    api_key = _get_google_api_key()
+    return _get_llm_cached(_get_structured_model(), api_key)
 
 
 def _language_hint(language: str, source_kind: str) -> str:
@@ -90,18 +101,41 @@ async def _invoke_structured_output(
     schema_cls: type[ResumeProfile] | type[JDProfile],
     system_prompt: str,
     user_prompt: str,
+    request_type: str,
+    input_chars: int,
 ):
+    model_name = _get_structured_model()
+    start = time.perf_counter()
     llm = _get_llm()
     structured_llm = llm.with_structured_output(schema_cls)
     messages = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_prompt),
     ]
-    return await structured_llm.ainvoke(messages)
+    try:
+        result = await structured_llm.ainvoke(messages)
+        logger.info(
+            "structured_analysis request_type=%s model=%s input_chars=%d latency_ms=%.1f status=ok",
+            request_type,
+            model_name,
+            input_chars,
+            (time.perf_counter() - start) * 1000,
+        )
+        return result
+    except Exception as exc:
+        logger.error(
+            "structured_analysis request_type=%s model=%s input_chars=%d latency_ms=%.1f status=error error=%s",
+            request_type,
+            model_name,
+            input_chars,
+            (time.perf_counter() - start) * 1000,
+            exc,
+        )
+        raise
 
 
 async def extract_resume_profile(resume_text: str, language: str = "en") -> ResumeProfile:
-    """Extract a structured resume profile with Gemini Pro."""
+    """Extract a structured resume profile with Gemini Flash."""
     return await _invoke_structured_output(
         schema_cls=ResumeProfile,
         system_prompt=RESUME_SYSTEM_PROMPT + _language_hint(language, "resume"),
@@ -109,11 +143,13 @@ async def extract_resume_profile(resume_text: str, language: str = "en") -> Resu
             "Please extract structured information from this resume and return it as a JSON object:\n\n"
             f"{resume_text}"
         ),
+        request_type="resume",
+        input_chars=len(resume_text),
     )
 
 
 async def extract_jd_profile(jd_text: str, language: str = "en") -> JDProfile:
-    """Extract a structured JD profile with Gemini Pro."""
+    """Extract a structured JD profile with Gemini Flash."""
     return await _invoke_structured_output(
         schema_cls=JDProfile,
         system_prompt=JD_SYSTEM_PROMPT + _language_hint(language, "JD"),
@@ -121,6 +157,8 @@ async def extract_jd_profile(jd_text: str, language: str = "en") -> JDProfile:
             "Please extract structured information from this job description and return it as a JSON object:\n\n"
             f"{jd_text}"
         ),
+        request_type="jd",
+        input_chars=len(jd_text),
     )
 
 
@@ -131,7 +169,7 @@ async def refine_structured_profile(
     doc_type: str = "resume",
     language: str = "en",
 ) -> ResumeProfile | JDProfile:
-    """Refine an existing structured resume or JD profile using Gemini Pro."""
+    """Refine an existing structured resume or JD profile using Gemini Flash."""
     if doc_type == "resume":
         schema_cls = ResumeProfile
         role_desc = "resume analyst"
@@ -157,6 +195,8 @@ async def refine_structured_profile(
         schema_cls=schema_cls,
         system_prompt=system_prompt,
         user_prompt=user_prompt,
+        request_type=f"refine_{doc_type}",
+        input_chars=len(json.dumps(current_structured, ensure_ascii=False)) + len(feedback),
     )
 
 

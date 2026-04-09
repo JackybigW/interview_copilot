@@ -6,16 +6,21 @@ Model: gemini-3-flash-preview
 
 import os
 import logging
+from functools import lru_cache
 from typing import AsyncGenerator
 
 from google import genai
 
 logger = logging.getLogger(__name__)
 
+GEMINI_FLASH_MODEL = os.getenv("GEMINI_FLASH_MODEL", "gemini-3-flash-preview")
 
+
+@lru_cache(maxsize=1)
 def _get_client() -> genai.Client:
     """Get a Google GenAI client."""
     api_key = os.environ.get("GEMINI_API_KEY", "")
+    logger.info("Gemini Flash client init: key_prefix=%s", api_key[:8])
     return genai.Client(api_key=api_key)
 
 
@@ -64,7 +69,7 @@ async def generate_answer_stream(
         client = _get_client()
 
         response = client.models.generate_content_stream(
-            model="gemini-3-flash-preview",
+            model=GEMINI_FLASH_MODEL,
             contents=user_content,
             config=genai.types.GenerateContentConfig(
                 system_instruction=system_instruction,
@@ -134,7 +139,7 @@ async def detect_question_and_answer_stream(
         client = _get_client()
 
         response = client.models.generate_content_stream(
-            model="gemini-3-flash-preview",
+            model=GEMINI_FLASH_MODEL,
             contents=user_content,
             config=genai.types.GenerateContentConfig(
                 system_instruction=system_instruction,
