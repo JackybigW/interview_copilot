@@ -1,6 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { client } from '@/lib/api';
 import {
@@ -15,6 +26,8 @@ import { getAPIBaseURL } from '@/lib/config';
 interface InterviewSession {
   id: number;
   title: string;
+  company?: string;
+  job_title?: string;
   language: string;
   status: string;
   duration: number;
@@ -375,6 +388,10 @@ function JDCard({ profile }: { profile: JDProfile }) {
   );
 }
 
+function formatSessionSecondaryMeta(session: InterviewSession) {
+  return [session.company, session.job_title].filter((part): part is string => !!part?.trim()).join(' · ');
+}
+
 // ─── Main Component ──────────────────────────────────────────────────
 
 export default function Workspace() {
@@ -389,6 +406,8 @@ export default function Workspace() {
   const [jdProfile, setJdProfile] = useState<JDProfile | null>(null);
   const [resumeContext, setResumeContext] = useState('');
   const [jdContext, setJdContext] = useState('');
+  const [company, setCompany] = useState('');
+  const [jobTitle, setJobTitle] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analyzeStep, setAnalyzeStep] = useState('');
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgressState>({
@@ -401,6 +420,12 @@ export default function Workspace() {
   const [uploadedFileName, setUploadedFileName] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [showMissingStartDialog, setShowMissingStartDialog] = useState(false);
+  const [isCreatingSession, setIsCreatingSession] = useState(false);
+  const createSessionInFlightRef = useRef(false);
+  const [editingSessionId, setEditingSessionId] = useState<number | null>(null);
+  const [editingSessionTitle, setEditingSessionTitle] = useState('');
+  const [isSavingSessionTitle, setIsSavingSessionTitle] = useState(false);
 
   // Confirm / Refine state
   const [isConfirmed, setIsConfirmed] = useState(false);
@@ -632,6 +657,111 @@ export default function Workspace() {
     setShowRefineChat(null);
   };
 
+  const getMissingStartCopy = () => {
+    const hasResume = !!resumeText.trim();
+    const hasJd = !!jdText.trim();
+
+    if (!hasResume && !hasJd) {
+      return {
+        title: '未检测到简历和职位描述',
+        description: '当前没有简历文本和职位描述文本。补上这两项后，AI 回答会同时结合你的背景和目标岗位，内容会更精准。仍要创建会话并继续吗？',
+      };
+    }
+
+    if (!hasResume) {
+      return {
+        title: '未检测到简历',
+        description: '当前没有简历文本。补上简历后，AI 回答会更贴近你的背景、经历和优势。仍要创建会话并继续吗？',
+      };
+    }
+
+    return {
+      title: '未检测到职位描述',
+      description: '当前没有职位描述文本。补上 JD 后，AI 回答会更贴近目标岗位、职责和要求。仍要创建会话并继续吗？',
+    };
+  };
+
+  const createSession = async () => {
+    if (createSessionInFlightRef.current) return;
+
+    createSessionInFlightRef.current = true;
+    setIsCreatingSession(true);
+
+    try {
+      const response = await client.apiCall.invoke({
+        url: '/api/v1/interview/sessions',
+        method: 'POST',
+        data: {
+          resume_text: resumeText,
+          jd_text: jdText,
+          resume_summary: resumeContext,
+          jd_summary: jdContext,
+          company: company.trim(),
+          job_title: jobTitle.trim(),
+          language,
+        },
+      });
+      const sessionId = response?.data?.id;
+      if (sessionId) {
+        setShowMissingStartDialog(false);
+        navigate(`/interview/${sessionId}`, {
+          state: { resumeContext, jdContext, language, resumeText, jdText },
+        });
+      }
+    } catch (err) {
+      console.error('Failed to create session:', err);
+    } finally {
+      createSessionInFlightRef.current = false;
+      setIsCreatingSession(false);
+    }
+  };
+
+  const handleStartInterview = async () => {
+    if (!resumeText.trim() || !jdText.trim()) {
+      setShowMissingStartDialog(true);
+      return;
+    }
+
+    await createSession();
+  };
+
+  const handleConfirmMissingStart = async () => {
+    setShowMissingStartDialog(false);
+    await createSession();
+  };
+
+  const handleBeginSessionRename = (session: InterviewSession) => {
+    setEditingSessionId(session.id);
+    setEditingSessionTitle(session.title || `Interview #${session.id}`);
+  };
+
+  const handleCancelSessionRename = () => {
+    setEditingSessionId(null);
+    setEditingSessionTitle('');
+  };
+
+  const handleSaveSessionRename = async (sessionId: number) => {
+    const nextTitle = editingSessionTitle.trim();
+    if (!nextTitle || isSavingSessionTitle) return;
+
+    setIsSavingSessionTitle(true);
+    try {
+      await client.apiCall.invoke({
+        url: `/api/v1/interview/sessions/${sessionId}`,
+        method: 'PUT',
+        data: { title: nextTitle },
+      });
+      setSessions((prev) => prev.map((session) => (
+        session.id === sessionId ? { ...session, title: nextTitle } : session
+      )));
+      handleCancelSessionRename();
+    } catch (err) {
+      console.error('Failed to rename session:', err);
+    } finally {
+      setIsSavingSessionTitle(false);
+    }
+  };
+
   // Open refine chat
   const handleRequestChanges = (type: 'resume' | 'jd') => {
     setShowRefineChat(type);
@@ -693,32 +823,6 @@ export default function Workspace() {
       }]);
     } finally {
       setIsRefining(false);
-    }
-  };
-
-  // Start interview
-  const handleStartInterview = async () => {
-    try {
-      const response = await client.apiCall.invoke({
-        url: '/api/v1/interview/sessions',
-        method: 'POST',
-        data: {
-          resume_text: resumeText,
-          jd_text: jdText,
-          resume_summary: resumeContext,
-          jd_summary: jdContext,
-          language,
-          title: `Interview ${new Date().toLocaleDateString()}`,
-        },
-      });
-      const sessionId = response?.data?.id;
-      if (sessionId) {
-        navigate(`/interview/${sessionId}`, {
-          state: { resumeContext, jdContext, language, resumeText, jdText },
-        });
-      }
-    } catch (err) {
-      console.error('Failed to create session:', err);
     }
   };
 
@@ -971,6 +1075,31 @@ export default function Workspace() {
                   placeholder="Paste the job description here..."
                   className="min-h-[200px] bg-white/[0.03] border border-white/[0.06] text-white/90 placeholder:text-white/15 resize-none rounded-2xl focus:border-cyan-500/40 focus:ring-1 focus:ring-cyan-500/20 transition-all"
                 />
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-white/45 uppercase tracking-[0.14em]">
+                      Company / 公司
+                    </label>
+                    <Input
+                      value={company}
+                      onChange={(e) => setCompany(e.target.value)}
+                      placeholder="Optional company name"
+                      className="h-11 bg-white/[0.03] border-white/[0.06] text-white/90 placeholder:text-white/20 focus-visible:ring-cyan-500/20 focus-visible:border-cyan-500/40"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-white/45 uppercase tracking-[0.14em]">
+                      Job Title / 职位
+                    </label>
+                    <Input
+                      value={jobTitle}
+                      onChange={(e) => setJobTitle(e.target.value)}
+                      placeholder="Optional role title"
+                      className="h-11 bg-white/[0.03] border-white/[0.06] text-white/90 placeholder:text-white/20 focus-visible:ring-cyan-500/20 focus-visible:border-cyan-500/40"
+                    />
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1154,7 +1283,7 @@ export default function Workspace() {
             <div className="pt-2 pb-8">
               <Button
                 onClick={handleStartInterview}
-                disabled={analysisReady && !isConfirmed}
+                disabled={isCreatingSession || (analysisReady && !isConfirmed)}
                 className="w-full relative overflow-hidden bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white py-7 rounded-2xl text-lg font-bold shadow-xl shadow-green-500/20 hover:shadow-green-500/30 transition-all duration-300 group disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <span className="relative z-10 flex items-center justify-center gap-3">
@@ -1162,7 +1291,7 @@ export default function Workspace() {
                     <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
                     <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
                   </svg>
-                  Start Interview
+                  {isCreatingSession ? 'Creating...' : 'Start Interview'}
                 </span>
                 <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/5 to-white/0 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />
               </Button>
@@ -1204,7 +1333,8 @@ export default function Workspace() {
                 <div
                   key={session.id}
                   className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5 flex items-center justify-between hover:bg-white/[0.04] hover:border-white/[0.1] transition-all duration-300 cursor-pointer group"
-                  onClick={() =>
+                  onClick={() => {
+                    if (editingSessionId === session.id) return;
                     navigate(`/interview/${session.id}`, {
                       state: {
                         resumeContext: session.resume_summary || '',
@@ -1212,8 +1342,8 @@ export default function Workspace() {
                         language: session.language || 'en',
                         viewOnly: session.status === 'completed',
                       },
-                    })
-                  }
+                    });
+                  }}
                 >
                   <div className="flex items-center gap-4">
                     <div
@@ -1222,20 +1352,85 @@ export default function Workspace() {
                           ? 'bg-green-400'
                           : session.status === 'active'
                             ? 'bg-yellow-400 animate-pulse'
-                            : 'bg-white/15'
+                        : 'bg-white/15'
                       }`}
                     />
                     <div>
-                      <h3 className="text-sm font-semibold text-white/85 group-hover:text-white transition-colors">
-                        {session.title || `Interview #${session.id}`}
-                      </h3>
-                      <div className="flex items-center gap-3 mt-1">
-                        <span className="text-[11px] text-white/30">{formatDate(session.created_at)}</span>
-                        <span className="text-[11px] text-white/30 font-mono">{formatDuration(session.duration)}</span>
-                        <span className="text-[10px] px-2 py-0.5 rounded-lg bg-white/[0.04] text-white/35 border border-white/[0.06]">
-                          {session.language === 'zh' ? '中文' : session.language === 'mixed' ? '中英' : 'EN'}
-                        </span>
-                      </div>
+                      {editingSessionId === session.id ? (
+                        <div className="flex flex-col gap-2" onClick={(e) => e.stopPropagation()}>
+                          <Input
+                            autoFocus
+                            value={editingSessionTitle}
+                            onChange={(e) => setEditingSessionTitle(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                void handleSaveSessionRename(session.id);
+                              }
+                              if (e.key === 'Escape') {
+                                e.preventDefault();
+                                handleCancelSessionRename();
+                              }
+                            }}
+                            className="h-10 w-[280px] bg-white/[0.04] border-white/[0.08] text-white/90 placeholder:text-white/25 focus-visible:ring-purple-500/20 focus-visible:border-purple-500/40"
+                            placeholder="Session title"
+                          />
+                          <div className="flex items-center gap-2">
+                            <Button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleSaveSessionRename(session.id);
+                              }}
+                              disabled={isSavingSessionTitle || !editingSessionTitle.trim()}
+                              className="h-8 px-3 bg-gradient-to-r from-purple-600 to-violet-600 text-white hover:from-purple-500 hover:to-violet-500 rounded-lg text-xs"
+                            >
+                              {isSavingSessionTitle ? 'Saving...' : 'Save'}
+                            </Button>
+                            <Button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleCancelSessionRename();
+                              }}
+                              className="h-8 px-3 bg-white/[0.04] border border-white/[0.08] text-white/50 hover:bg-white/[0.08] hover:text-white/80 rounded-lg text-xs"
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-sm font-semibold text-white/85 group-hover:text-white transition-colors">
+                              {session.title || `Interview #${session.id}`}
+                            </h3>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleBeginSessionRename(session);
+                              }}
+                              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md text-white/30 hover:text-white/70 hover:bg-white/[0.05]"
+                              title="Rename session"
+                            >
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M12 20h9" />
+                                <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                              </svg>
+                            </button>
+                          </div>
+                          {formatSessionSecondaryMeta(session) && (
+                            <p className="text-[11px] text-white/35 mt-1">
+                              {formatSessionSecondaryMeta(session)}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-3 mt-1">
+                            <span className="text-[11px] text-white/30">{formatDate(session.created_at)}</span>
+                            <span className="text-[11px] text-white/30 font-mono">{formatDuration(session.duration)}</span>
+                            <span className="text-[10px] px-2 py-0.5 rounded-lg bg-white/[0.04] text-white/35 border border-white/[0.06]">
+                              {session.language === 'zh' ? '中文' : session.language === 'mixed' ? '中英' : 'EN'}
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
@@ -1269,6 +1464,37 @@ export default function Workspace() {
           </div>
         )}
       </div>
+
+      <AlertDialog open={showMissingStartDialog} onOpenChange={setShowMissingStartDialog}>
+        <AlertDialogContent className="border-white/10 bg-[#111115] text-white shadow-2xl shadow-black/40 max-w-xl">
+          <AlertDialogHeader className="text-left">
+            <AlertDialogTitle className="text-white text-xl">
+              {getMissingStartCopy().title}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-white/55 leading-6">
+              {getMissingStartCopy().description}
+              <br />
+              确认后会直接创建会话，并继续进入面试。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-3">
+            <AlertDialogCancel
+              className="mt-0 border-white/10 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
+            >
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isCreatingSession}
+              onClick={() => {
+                void handleConfirmMissingStart();
+              }}
+              className="bg-gradient-to-r from-purple-600 to-cyan-600 text-white hover:from-purple-500 hover:to-cyan-500 disabled:opacity-50"
+            >
+              {isCreatingSession ? '创建中...' : '确认继续'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

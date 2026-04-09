@@ -9,9 +9,12 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
-from services.interview_sessions import Interview_sessionsService
 from dependencies.auth import get_current_user
 from schemas.auth import UserResponse
+from models.interview_sessions import (
+    prepare_interview_session_payload,
+)
+from services.interview_sessions import Interview_sessionsService
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -33,6 +36,8 @@ class Interview_sessionsData(BaseModel):
     ai_responses: str = None
     status: str = None
     duration: int = None
+    company: Optional[str] = None
+    job_title: Optional[str] = None
     title: str = None
     created_at: Optional[datetime] = None
 
@@ -50,6 +55,8 @@ class Interview_sessionsUpdateData(BaseModel):
     ai_responses: Optional[str] = None
     status: Optional[str] = None
     duration: Optional[int] = None
+    company: Optional[str] = None
+    job_title: Optional[str] = None
     title: Optional[str] = None
     created_at: Optional[datetime] = None
 
@@ -69,6 +76,8 @@ class Interview_sessionsResponse(BaseModel):
     ai_responses: Optional[str] = None
     status: Optional[str] = None
     duration: Optional[int] = None
+    company: Optional[str] = None
+    job_title: Optional[str] = None
     title: Optional[str] = None
     created_at: Optional[datetime] = None
 
@@ -218,7 +227,8 @@ async def create_interview_sessions(
     
     service = Interview_sessionsService(db)
     try:
-        result = await service.create(data.model_dump(), user_id=str(current_user.id))
+        payload = prepare_interview_session_payload(data.model_dump())
+        result = await service.create(payload, user_id=str(current_user.id))
         if not result:
             raise HTTPException(status_code=400, detail="Failed to create interview_sessions")
         
@@ -246,7 +256,8 @@ async def create_interview_sessionss_batch(
     
     try:
         for item_data in request.items:
-            result = await service.create(item_data.model_dump(), user_id=str(current_user.id))
+            payload = prepare_interview_session_payload(item_data.model_dump())
+            result = await service.create(payload, user_id=str(current_user.id))
             if result:
                 results.append(result)
         
