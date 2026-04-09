@@ -5,6 +5,7 @@
 Interview Copilot 是一个 AI 面试助手工具，包含以下核心功能：
 - **简历/JD 结构化分析**：使用 Gemini Flash + LangChain 进行结构化信息提取与分析修订
 - **实时面试辅助**：使用 Gemini 3 Flash 进行流式回答生成
+- **会话元数据管理**：支持填写公司名、职位名，并在历史记录中重命名会话标题
 - **语音识别**：支持火山引擎 STT 和 MiniMax STT
 - **文件上传**：支持 PDF、DOCX、MD、TXT 格式简历上传
 

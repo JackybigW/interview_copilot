@@ -4,12 +4,15 @@
 
 import asyncio
 import importlib
+import os
 import pkgutil
+from pathlib import Path
 from logging.config import fileConfig
 
 import models
 from alembic import context
 from core.database import Base
+from dotenv import dotenv_values
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -18,6 +21,26 @@ for _, module_name, _ in pkgutil.iter_modules(models.__path__):
     importlib.import_module(f"{models.__name__}.{module_name}")
 
 config = context.config
+
+
+def _resolve_database_url() -> str:
+    """Resolve DATABASE_URL for Alembic from env or backend/.env."""
+    direct = os.environ.get("DATABASE_URL", "").strip()
+    if direct:
+        return direct
+
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    if env_path.exists():
+        values = dotenv_values(env_path)
+        db_url = (values.get("DATABASE_URL") or "").strip()
+        if db_url:
+            os.environ["DATABASE_URL"] = db_url
+            return db_url
+
+    raise RuntimeError("DATABASE_URL is required for Alembic migrations")
+
+
+config.set_main_option("sqlalchemy.url", _resolve_database_url())
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
