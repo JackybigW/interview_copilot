@@ -3,6 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { client } from '@/lib/api';
+import {
+  normalizeJDProfile,
+  normalizeResumeProfile,
+  resolveStructuredAnalysisResponse,
+  type JDProfile,
+  type ResumeProfile,
+} from '@/lib/analysis';
 import { getAPIBaseURL } from '@/lib/config';
 
 interface InterviewSession {
@@ -14,48 +21,6 @@ interface InterviewSession {
   created_at: string;
   resume_summary?: string;
   jd_summary?: string;
-}
-
-interface Project {
-  name: string;
-  role: string;
-  tech_stack: string[];
-  highlights: string[];
-}
-
-interface WorkExp {
-  company: string;
-  title: string;
-  duration: string;
-  key_responsibilities: string[];
-  achievements: string[];
-}
-
-interface ResumeProfile {
-  candidate_name: string;
-  years_of_experience: string;
-  technical_skills: string[];
-  soft_skills: string[];
-  projects: Project[];
-  work_experiences: WorkExp[];
-  education: string[];
-  strongest_points: string[];
-  certifications: string[];
-}
-
-interface JDProfile {
-  job_title: string;
-  company: string;
-  team: string;
-  level: string;
-  required_skills: string[];
-  preferred_skills: string[];
-  requirements: { description: string; is_required: boolean }[];
-  responsibilities: string[];
-  interview_focus_areas: string[];
-  keywords: string[];
-  tech_stack: string[];
-  years_experience_required: string;
 }
 
 interface ChatMessage {
@@ -507,22 +472,11 @@ export default function Workspace() {
         });
         // SDK wraps in response.data; backend returns {structured, concise_context}
         const raw = resumeResp?.data;
-        const data = raw?.structured ? raw : raw?.data;
+        const data = resolveStructuredAnalysisResponse<ResumeProfile>(raw);
         console.log('[Analyze Resume] raw response:', JSON.stringify(raw));
         console.log('[Analyze Resume] resolved data:', JSON.stringify(data));
         if (data?.structured) {
-          const s = data.structured as ResumeProfile;
-          // Defensive defaults for all array fields
-          setResumeProfile({
-            ...s,
-            technical_skills: s.technical_skills || [],
-            soft_skills: s.soft_skills || [],
-            projects: s.projects || [],
-            work_experiences: s.work_experiences || [],
-            education: s.education || [],
-            strongest_points: s.strongest_points || [],
-            certifications: s.certifications || [],
-          });
+          setResumeProfile(normalizeResumeProfile(data.structured as ResumeProfile));
         }
         if (data?.concise_context) setResumeContext(data.concise_context);
       }
@@ -535,21 +489,11 @@ export default function Workspace() {
           data: { text: jdText, type: 'jd', language },
         });
         const raw = jdResp?.data;
-        const data = raw?.structured ? raw : raw?.data;
+        const data = resolveStructuredAnalysisResponse<JDProfile>(raw);
         console.log('[Analyze JD] raw response:', JSON.stringify(raw));
         console.log('[Analyze JD] resolved data:', JSON.stringify(data));
         if (data?.structured) {
-          const s = data.structured as JDProfile;
-          setJdProfile({
-            ...s,
-            required_skills: s.required_skills || [],
-            preferred_skills: s.preferred_skills || [],
-            requirements: s.requirements || [],
-            responsibilities: s.responsibilities || [],
-            interview_focus_areas: s.interview_focus_areas || [],
-            keywords: s.keywords || [],
-            tech_stack: s.tech_stack || [],
-          });
+          setJdProfile(normalizeJDProfile(data.structured as JDProfile));
         }
         if (data?.concise_context) setJdContext(data.concise_context);
       }
@@ -607,34 +551,14 @@ export default function Workspace() {
       });
 
       const raw = resp?.data;
-      const data = raw?.structured ? raw : raw?.data;
+      const data = resolveStructuredAnalysisResponse<ResumeProfile | JDProfile>(raw);
       console.log('[Refine] raw response:', JSON.stringify(raw));
       if (data?.structured) {
         if (showRefineChat === 'resume') {
-          const s = data.structured as ResumeProfile;
-          setResumeProfile({
-            ...s,
-            technical_skills: s.technical_skills || [],
-            soft_skills: s.soft_skills || [],
-            projects: s.projects || [],
-            work_experiences: s.work_experiences || [],
-            education: s.education || [],
-            strongest_points: s.strongest_points || [],
-            certifications: s.certifications || [],
-          });
+          setResumeProfile(normalizeResumeProfile(data.structured as ResumeProfile));
           if (data.concise_context) setResumeContext(data.concise_context);
         } else {
-          const s = data.structured as JDProfile;
-          setJdProfile({
-            ...s,
-            required_skills: s.required_skills || [],
-            preferred_skills: s.preferred_skills || [],
-            requirements: s.requirements || [],
-            responsibilities: s.responsibilities || [],
-            interview_focus_areas: s.interview_focus_areas || [],
-            keywords: s.keywords || [],
-            tech_stack: s.tech_stack || [],
-          });
+          setJdProfile(normalizeJDProfile(data.structured as JDProfile));
           if (data.concise_context) setJdContext(data.concise_context);
         }
         setChatMessages(prev => [...prev, {
