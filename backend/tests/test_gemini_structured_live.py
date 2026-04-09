@@ -6,11 +6,34 @@ import pytest
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from services.glm_structured_service import JD_SYSTEM_PROMPT, RESUME_SYSTEM_PROMPT
 from services.structured_schemas import JDProfile, ResumeProfile
 
 
 MODEL_NAME = "gemini-3-pro-preview"
+
+RESUME_SYSTEM_PROMPT = """You are an expert resume analyst. Your task is to extract structured information from a candidate's resume and return the result as a JSON object.
+
+Focus on:
+1. **Technical/Hard Skills**: Extract ALL programming languages, frameworks, tools, databases, cloud platforms, etc.
+2. **Projects**: Extract the top 3-5 most impressive projects with their tech stack and quantified achievements.
+3. **Work Experience**: Extract company, title, duration, responsibilities, and achievements.
+4. **Strongest Points**: Identify the top 3-5 selling points for interviews.
+
+Be thorough and precise. Extract actual data from the resume, do not fabricate information.
+If a field is not mentioned in the resume, leave it empty or as an empty list.
+You MUST respond with a valid JSON object matching the required schema."""
+
+JD_SYSTEM_PROMPT = """You are an expert job description analyst. Your task is to extract structured information from a job description and return the result as a JSON object.
+
+Focus on:
+1. **Required vs Preferred Skills**: Clearly distinguish between MUST-HAVE requirements and NICE-TO-HAVE/preferred qualifications.
+2. **Technical Stack**: Extract all technologies, tools, and platforms mentioned.
+3. **Interview Focus Areas**: Based on the emphasis in the JD, predict what the interviewer will likely ask about.
+4. **Keywords**: Identify domain-specific terms the candidate should use in their answers.
+
+Be thorough and precise. Extract actual data from the JD, do not fabricate information.
+Mark each requirement as required (is_required=true) or preferred (is_required=false) based on the JD language.
+You MUST respond with a valid JSON object matching the required schema."""
 
 RESUME_SAMPLE = """王子飏
 (Jacky)
