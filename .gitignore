@@ -18,6 +18,7 @@ backend/venv/
 frontend/node_modules/
 frontend/dist/
 backend/logs/
+docs/
 
 .idea/
 .vscode/
