@@ -44,3 +44,35 @@ async def test_generate_answer_logs_stream_timing(monkeypatch, caplog):
     assert "copilot_answer request_type=generate_answer model=gemini-3-flash-preview" in caplog.text
     assert "copilot_answer first_chunk model=gemini-3-flash-preview" in caplog.text
     assert "copilot_answer complete model=gemini-3-flash-preview" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_update_session_only_updates_title(monkeypatch):
+    import routers.interview as interview
+
+    captured = {}
+
+    class FakeService:
+        def __init__(self, db):
+            self.db = db
+
+        async def update(self, obj_id, update_data, user_id=None):
+            captured["obj_id"] = obj_id
+            captured["update_data"] = update_data
+            captured["user_id"] = user_id
+            return object()
+
+    monkeypatch.setattr(interview, "Interview_sessionsService", FakeService)
+
+    response = await interview.update_session(
+        42,
+        interview.UpdateSessionRequest(title="New title"),
+        db=object(),
+    )
+
+    assert response == {"status": "updated"}
+    assert captured == {
+        "obj_id": 42,
+        "update_data": {"title": "New title"},
+        "user_id": "anonymous",
+    }

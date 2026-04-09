@@ -10,10 +10,13 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import StreamingResponse
+from typing import Optional
+
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
+from models.interview_sessions import prepare_interview_session_payload
 from services.interview_sessions import Interview_sessionsService
 from services.gemini_structured_service import (
     extract_resume_profile,
@@ -75,7 +78,9 @@ class CreateSessionRequest(BaseModel):
     resume_summary: str = ""
     jd_summary: str = ""
     language: str = "en"
-    title: str = ""
+    company: Optional[str] = None
+    job_title: Optional[str] = None
+    title: Optional[str] = None
 
 
 class UpdateSessionRequest(BaseModel):
@@ -83,7 +88,7 @@ class UpdateSessionRequest(BaseModel):
     ai_responses: str = ""
     status: str = ""
     duration: int = 0
-    title: str = ""
+    title: Optional[str] = None
 
 
 # ─── Structured Resume / JD Analysis (Gemini Flash + LangChain) ────────
@@ -276,8 +281,9 @@ async def create_session(
     """Create a new interview session (no auth required)."""
     try:
         service = Interview_sessionsService(db)
-        session = await service.create(
-            data={
+        now = datetime.now()
+        payload = prepare_interview_session_payload(
+            {
                 "resume_key": request.resume_key,
                 "jd_key": request.jd_key,
                 "resume_text": request.resume_text,
@@ -285,16 +291,28 @@ async def create_session(
                 "resume_summary": request.resume_summary,
                 "jd_summary": request.jd_summary,
                 "language": request.language,
+                "company": request.company,
+                "job_title": request.job_title,
+                "title": request.title,
                 "status": "preparing",
-                "title": request.title or f"Interview {datetime.now().strftime('%Y-%m-%d %H:%M')}",
                 "transcript": "[]",
                 "ai_responses": "[]",
                 "duration": 0,
-                "created_at": datetime.now(),
-            },
+                "created_at": now,
+            }
+        )
+        session = await service.create(
+            data=payload,
             user_id=ANONYMOUS_USER_ID,
         )
-        return {"id": session.id, "status": "created"}
+        return {
+            "id": session.id,
+            "status": "created",
+            "title": session.title,
+            "company": session.company,
+            "job_title": session.job_title,
+            "created_at": session.created_at,
+        }
     except Exception as e:
         logger.error(f"Create session error: {e}")
         raise HTTPException(status_code=500, detail=str(e))

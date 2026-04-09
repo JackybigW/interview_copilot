@@ -67,6 +67,12 @@ During the interview loop, the app can consume transcript signal and generate gr
 
 Interview sessions are persisted so flows can be replayed, inspected, and iterated on.
 
+That now includes:
+
+- optional `company` and `job title` metadata before interview start
+- a preflight warning when resume or JD is missing
+- persisted history labels with inline rename
+
 ## Why This Is Interesting
 
 This project is not just “LLM on top of a form”.
@@ -122,6 +128,7 @@ React operator surface
   - workspace
   - interview session UI
   - session history
+  - session metadata + rename
 ```
 
 ## Stack
