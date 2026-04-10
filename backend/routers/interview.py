@@ -6,6 +6,7 @@ import json
 import logging
 import asyncio
 import time
+import math
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
@@ -31,6 +32,7 @@ import websockets
 
 from services.volcano_stt_service import (
     get_ws_url,
+    get_ws_connect_config,
     build_full_client_request,
     build_audio_request,
     parse_server_response,
@@ -89,6 +91,59 @@ class UpdateSessionRequest(BaseModel):
     status: str = ""
     duration: int = 0
     title: Optional[str] = None
+
+
+def _iter_transcript_chunks(result: dict) -> list[dict]:
+    """Normalize Volcano transcript payloads across response shapes."""
+    data = result.get("data", {})
+    payload_msg = data.get("payload_msg")
+
+    chunks: list[dict] = []
+
+    if isinstance(payload_msg, dict):
+        payload_results = payload_msg.get("result", [])
+        if isinstance(payload_results, list):
+            chunks.extend(item for item in payload_results if isinstance(item, dict))
+
+    direct_result = data.get("result")
+    if isinstance(direct_result, dict):
+        chunks.append(direct_result)
+    elif isinstance(direct_result, list):
+        chunks.extend(item for item in direct_result if isinstance(item, dict))
+
+    return chunks
+
+
+def _describe_pcm16(audio_data: bytes) -> dict:
+    """Return lightweight stats for signed 16-bit PCM audio."""
+    if len(audio_data) < 2:
+        return {
+            "samples": 0,
+            "peak": 0,
+            "rms": 0.0,
+            "nonzero_ratio": 0.0,
+        }
+
+    sample_count = len(audio_data) // 2
+    total_sq = 0.0
+    nonzero_count = 0
+    peak = 0
+
+    for idx in range(0, sample_count * 2, 2):
+        sample = int.from_bytes(audio_data[idx : idx + 2], "little", signed=True)
+        magnitude = abs(sample)
+        peak = max(peak, magnitude)
+        total_sq += sample * sample
+        if sample != 0:
+            nonzero_count += 1
+
+    rms = math.sqrt(total_sq / sample_count) if sample_count else 0.0
+    return {
+        "samples": sample_count,
+        "peak": peak,
+        "rms": round(rms, 2),
+        "nonzero_ratio": round(nonzero_count / sample_count, 4) if sample_count else 0.0,
+    }
 
 
 # ─── Structured Resume / JD Analysis (Gemini Flash + LangChain) ────────
@@ -427,6 +482,10 @@ async def websocket_stt_proxy(websocket: WebSocket):
 
     volc_ws = None
     language = "zh-CN"
+    request_sequence = 1
+    audio_frame_count = 0
+    transcript_event_count = 0
+    empty_result_count = 0
 
     try:
         # Wait for config message
@@ -436,10 +495,19 @@ async def websocket_stt_proxy(websocket: WebSocket):
 
         # Connect to Volcano Engine
         ws_url = get_ws_url()
-        volc_ws = await websockets.connect(ws_url)
+        # Bypass host-level proxy auto-detection for upstream STT traffic.
+        # In local environments with a SOCKS proxy configured, websockets 16
+        # requires an extra dependency (`python-socks`) and fails before the
+        # request reaches Volcano.
+        volc_ws = await websockets.connect(
+            ws_url,
+            proxy=None,
+            ping_interval=None,
+            **get_ws_connect_config(),
+        )
 
         # Send full client request with config
-        init_frame = build_full_client_request(language=language)
+        init_frame = build_full_client_request(language=language, sequence=request_sequence)
         await volc_ws.send(init_frame)
 
         # Wait for ACK
@@ -458,20 +526,35 @@ async def websocket_stt_proxy(websocket: WebSocket):
                     if isinstance(msg, bytes):
                         result = parse_server_response(msg)
                         if result["type"] == "result":
+                            transcript_event_count_local = 0
                             data = result.get("data", {})
-                            payload_msg = data.get("payload_msg", data)
-                            if isinstance(payload_msg, dict):
-                                result_list = payload_msg.get("result", [])
-                                if result_list:
-                                    for item in result_list:
-                                        text = item.get("text", "")
-                                        is_definite = item.get("definite", False)
-                                        if text:
-                                            await websocket.send_json({
-                                                "type": "transcript",
-                                                "text": text,
-                                                "is_final": is_definite,
-                                            })
+                            direct_result = data.get("result", {})
+                            direct_text = direct_result.get("text", "") if isinstance(direct_result, dict) else ""
+                            audio_info = data.get("audio_info", {}) if isinstance(data, dict) else {}
+                            for item in _iter_transcript_chunks(result):
+                                text = item.get("text", "")
+                                is_definite = item.get("definite", False)
+                                if text:
+                                    transcript_event_count_local += 1
+                                    await websocket.send_json({
+                                        "type": "transcript",
+                                        "text": text,
+                                        "is_final": is_definite,
+                                    })
+                            nonlocal transcript_event_count, empty_result_count
+                            transcript_event_count += transcript_event_count_local
+                            if transcript_event_count_local == 0:
+                                empty_result_count += 1
+
+                            if transcript_event_count_local > 0 or empty_result_count <= 8 or empty_result_count % 20 == 0:
+                                logger.info(
+                                    "stt_upstream_result events=%d empty_results=%d direct_text=%r audio_duration=%s payload_keys=%s",
+                                    transcript_event_count_local,
+                                    empty_result_count,
+                                    direct_text,
+                                    audio_info.get("duration"),
+                                    sorted(data.keys()) if isinstance(data, dict) else [],
+                                )
                         elif result["type"] == "error":
                             await websocket.send_json({
                                 "type": "error",
@@ -485,23 +568,53 @@ async def websocket_stt_proxy(websocket: WebSocket):
         relay_task = asyncio.create_task(relay_volcano_to_client())
 
         # Main loop: receive from client and forward to Volcano
+        client_disconnected = False
+
         try:
             while True:
                 message = await websocket.receive()
 
                 if "bytes" in message and message["bytes"]:
-                    audio_frame = build_audio_request(message["bytes"], is_last=False)
+                    audio_frame_count += 1
+                    audio_stats = _describe_pcm16(message["bytes"])
+                    if audio_frame_count <= 8 or audio_frame_count % 25 == 0:
+                        logger.info(
+                            "stt_audio_frame index=%d bytes=%d samples=%d peak=%d rms=%.2f nonzero_ratio=%.4f",
+                            audio_frame_count,
+                            len(message["bytes"]),
+                            audio_stats["samples"],
+                            audio_stats["peak"],
+                            audio_stats["rms"],
+                            audio_stats["nonzero_ratio"],
+                        )
+                    request_sequence += 1
+                    audio_frame = build_audio_request(
+                        message["bytes"],
+                        sequence=request_sequence,
+                        is_last=False,
+                    )
                     await volc_ws.send(audio_frame)
 
                 elif "text" in message and message["text"]:
                     data = json.loads(message["text"])
                     if data.get("type") == "stop":
-                        last_frame = build_audio_request(b"", is_last=True)
+                        request_sequence += 1
+                        last_frame = build_audio_request(
+                            b"",
+                            sequence=request_sequence,
+                            is_last=True,
+                        )
                         await volc_ws.send(last_frame)
                         await asyncio.sleep(1.0)
                         break
         except WebSocketDisconnect:
-            pass
+            client_disconnected = True
+
+        if client_disconnected:
+            try:
+                await asyncio.wait_for(asyncio.shield(relay_task), timeout=0.2)
+            except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
+                pass
 
         relay_task.cancel()
         try:
@@ -516,6 +629,12 @@ async def websocket_stt_proxy(websocket: WebSocket):
         except Exception:
             pass
     finally:
+        logger.info(
+            "stt_session_closed audio_frames=%d transcript_events=%d empty_results=%d",
+            audio_frame_count,
+            transcript_event_count,
+            empty_result_count,
+        )
         if volc_ws:
             try:
                 await volc_ws.close()
