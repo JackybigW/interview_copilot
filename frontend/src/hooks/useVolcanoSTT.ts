@@ -14,6 +14,8 @@ export interface TranscriptSegment {
 interface UseVolcanoSTTReturn {
   isListening: boolean;
   transcript: string;
+  interviewerTranscript: string;
+  userTranscript: string;
   interimTranscript: string;
   segments: TranscriptSegment[];
   startListening: (language: string) => void;
@@ -24,14 +26,32 @@ interface UseVolcanoSTTReturn {
   hasSystemAudio: boolean;
 }
 
+type SessionState = {
+  ws: WebSocket | null;
+  audioContext: AudioContext | null;
+  processor: ScriptProcessorNode | null;
+  source: MediaStreamAudioSourceNode | null;
+  gain: GainNode | null;
+};
+
+const EMPTY_SESSION: SessionState = {
+  ws: null,
+  audioContext: null,
+  processor: null,
+  source: null,
+  gain: null,
+};
+
 /**
- * Hook for Volcano Engine streaming STT via WebSocket proxy.
- * Captures mic (user) + system audio (interviewer via screen share),
- * sends audio to backend WebSocket which proxies to Volcano Engine.
+ * Hook for dual-stream Volcano STT:
+ * - Microphone -> `user`
+ * - Tab/system audio via getDisplayMedia -> `interviewer`
  */
 export function useVolcanoSTT(): UseVolcanoSTTReturn {
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState('');
+  const [interviewerTranscript, setInterviewerTranscript] = useState('');
+  const [userTranscript, setUserTranscript] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -39,24 +59,61 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
 
   const segmentIdRef = useRef(0);
   const isListeningRef = useRef(false);
+  const stopRequestedRef = useRef(false);
 
-  // WebSocket
-  const wsRef = useRef<WebSocket | null>(null);
-
-  // MediaStream references
   const micStreamRef = useRef<MediaStream | null>(null);
   const displayStreamRef = useRef<MediaStream | null>(null);
-
-  // Audio processing
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const sessionsRef = useRef<Record<Speaker, SessionState>>({
+    interviewer: { ...EMPTY_SESSION },
+    user: { ...EMPTY_SESSION },
+  });
+  const committedRef = useRef<Record<Speaker, string>>({
+    interviewer: '',
+    user: '',
+  });
+  const liveRef = useRef<Record<Speaker, string>>({
+    interviewer: '',
+    user: '',
+  });
 
   const isSupported =
-    typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
+    typeof navigator !== 'undefined' &&
+    !!navigator.mediaDevices?.getUserMedia &&
+    !!navigator.mediaDevices?.getDisplayMedia;
 
-  /**
-   * Convert Float32Array PCM to 16-bit PCM bytes
-   */
+  const syncTranscriptState = useCallback(() => {
+    const nextUser = `${committedRef.current.user}${liveRef.current.user}`.trim();
+    const nextInterviewer = `${committedRef.current.interviewer}${liveRef.current.interviewer}`.trim();
+
+    setUserTranscript(nextUser);
+    setInterviewerTranscript(nextInterviewer);
+
+    const combined = [nextInterviewer ? `[interviewer] ${nextInterviewer}` : '', nextUser ? `[user] ${nextUser}` : '']
+      .filter(Boolean)
+      .join(' ');
+    setTranscript(combined.trim());
+  }, []);
+
+  const getWebSocketUrl = (): string => {
+    const baseUrl = getAPIBaseURL();
+
+    if (typeof window !== 'undefined') {
+      const pageHost = window.location.host;
+      const pageProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const apiUrl = new URL(baseUrl);
+      const isLocalApi = apiUrl.hostname === '127.0.0.1' || apiUrl.hostname === 'localhost';
+      const isLocalPage = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost';
+
+      if (isLocalApi && isLocalPage) {
+        return `${pageProtocol}://${pageHost}/api/v1/interview/ws-stt`;
+      }
+    }
+
+    const wsProtocol = baseUrl.startsWith('https') ? 'wss' : 'ws';
+    const wsHost = baseUrl.replace(/^https?:\/\//, '');
+    return `${wsProtocol}://${wsHost}/api/v1/interview/ws-stt`;
+  };
+
   const float32ToInt16 = (buffer: Float32Array): ArrayBuffer => {
     const int16 = new Int16Array(buffer.length);
     for (let i = 0; i < buffer.length; i++) {
@@ -66,9 +123,6 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
     return int16.buffer;
   };
 
-  /**
-   * Downsample audio from source rate to target rate
-   */
   const downsample = (
     buffer: Float32Array,
     sourceRate: number,
@@ -85,191 +139,202 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
     return result;
   };
 
-  const startListening = useCallback(
-    async (language: string = 'zh') => {
-      setError(null);
+  const teardownSession = useCallback((speaker: Speaker) => {
+    const session = sessionsRef.current[speaker];
 
-      try {
-        // 1. Capture microphone
-        const micStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            channelCount: 1,
-            sampleRate: 16000,
-            echoCancellation: true,
-            noiseSuppression: true,
-          },
-        });
-        micStreamRef.current = micStream;
+    if (session.processor) {
+      session.processor.disconnect();
+      session.processor = null;
+    }
 
-        // 2. Try to capture system/browser audio (interviewer)
-        let displayStream: MediaStream | null = null;
-        try {
-          displayStream = await navigator.mediaDevices.getDisplayMedia({
-            video: true,
-            audio: true,
-          });
-          // Remove video tracks
-          displayStream.getVideoTracks().forEach((track) => track.stop());
-          if (displayStream.getAudioTracks().length === 0) {
-            displayStream = null;
-          } else {
-            setHasSystemAudio(true);
-          }
-        } catch {
-          displayStream = null;
-        }
-        displayStreamRef.current = displayStream;
+    if (session.source) {
+      session.source.disconnect();
+      session.source = null;
+    }
 
-        // 3. Create AudioContext and merge streams
-        const audioCtx = new AudioContext({ sampleRate: 16000 });
-        audioContextRef.current = audioCtx;
+    if (session.gain) {
+      session.gain.disconnect();
+      session.gain = null;
+    }
 
-        const destination = audioCtx.createMediaStreamDestination();
-        const micSource = audioCtx.createMediaStreamSource(micStream);
-        micSource.connect(destination);
+    if (session.audioContext) {
+      session.audioContext.close().catch(() => undefined);
+      session.audioContext = null;
+    }
 
-        if (displayStream) {
-          const displaySource =
-            audioCtx.createMediaStreamSource(displayStream);
-          displaySource.connect(destination);
+    if (session.ws) {
+      session.ws.close();
+      session.ws = null;
+    }
+  }, []);
 
-          displayStream.getAudioTracks().forEach((track) => {
-            track.onended = () => {
-              setHasSystemAudio(false);
-              displayStreamRef.current = null;
-            };
-          });
-        }
+  const handleTranscript = useCallback((speaker: Speaker, text: string, isFinal: boolean) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
 
-        // 4. Connect to backend WebSocket
-        const baseUrl = getAPIBaseURL();
-        const wsProtocol = baseUrl.startsWith('https') ? 'wss' : 'ws';
-        const wsHost = baseUrl.replace(/^https?:\/\//, '');
-        const wsUrl = `${wsProtocol}://${wsHost}/api/v1/interview/ws-stt`;
+    liveRef.current[speaker] = trimmed;
+    setInterimTranscript(`[${speaker}] ${trimmed}`);
 
-        const ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
+    if (isFinal) {
+      committedRef.current[speaker] = `${committedRef.current[speaker]} ${trimmed}`.trim() + ' ';
+      liveRef.current[speaker] = '';
+      setSegments((prev) => [
+        ...prev,
+        {
+          id: segmentIdRef.current++,
+          text: trimmed,
+          timestamp: Date.now(),
+          isFinal: true,
+          speaker,
+        },
+      ]);
+      setInterimTranscript('');
+    }
 
-        ws.onopen = () => {
-          // Send config
-          ws.send(JSON.stringify({ type: 'config', language }));
-        };
+    syncTranscriptState();
+  }, [syncTranscriptState]);
 
-        ws.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            if (data.type === 'ready') {
-              // Start sending audio
-              startAudioProcessing(audioCtx, destination.stream);
-            } else if (data.type === 'transcript') {
-              const text = data.text || '';
-              const isFinal = data.is_final || false;
-
-              if (isFinal && text.trim()) {
-                // Determine speaker heuristically - system audio = interviewer
-                const speaker: Speaker = hasSystemAudio
-                  ? 'interviewer'
-                  : 'user';
-                const newSegment: TranscriptSegment = {
-                  id: segmentIdRef.current++,
-                  text: text.trim(),
-                  timestamp: Date.now(),
-                  isFinal: true,
-                  speaker,
-                };
-                setSegments((prev) => [...prev, newSegment]);
-                setTranscript(
-                  (prev) => prev + `[${speaker}] ${text.trim()} `,
-                );
-                setInterimTranscript('');
-              } else if (text.trim()) {
-                setInterimTranscript(text);
-              }
-            } else if (data.type === 'error') {
-              console.error('STT error:', data.text);
-              setError(`STT error: ${data.text}`);
-            }
-          } catch {
-            // ignore parse errors
-          }
-        };
-
-        ws.onerror = () => {
-          setError('WebSocket connection error');
-        };
-
-        ws.onclose = () => {
-          if (isListeningRef.current) {
-            setIsListening(false);
-            isListeningRef.current = false;
-          }
-        };
-
-        isListeningRef.current = true;
-        setIsListening(true);
-      } catch (err) {
-        console.error('Audio capture error:', err);
-        setError('Failed to start. Please check microphone permissions.');
-        isListeningRef.current = false;
-        setIsListening(false);
-      }
-    },
-    [hasSystemAudio],
-  );
-
-  const startAudioProcessing = (
-    audioCtx: AudioContext,
-    stream: MediaStream,
-  ) => {
+  const startAudioProcessing = useCallback((speaker: Speaker, audioCtx: AudioContext, stream: MediaStream) => {
     const source = audioCtx.createMediaStreamSource(stream);
-    // Use ScriptProcessorNode for raw PCM access
     const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-    processorRef.current = processor;
+    const gain = audioCtx.createGain();
+    gain.gain.value = 0;
+
+    sessionsRef.current[speaker].source = source;
+    sessionsRef.current[speaker].processor = processor;
+    sessionsRef.current[speaker].gain = gain;
 
     processor.onaudioprocess = (e) => {
-      if (!isListeningRef.current || !wsRef.current) return;
-      if (wsRef.current.readyState !== WebSocket.OPEN) return;
+      const session = sessionsRef.current[speaker];
+      if (!isListeningRef.current || !session.ws) return;
+      if (session.ws.readyState !== WebSocket.OPEN) return;
 
       const inputData = e.inputBuffer.getChannelData(0);
-      // Downsample to 16kHz if needed
-      const downsampled = downsample(
-        inputData,
-        audioCtx.sampleRate,
-        16000,
-      );
+      const downsampled = downsample(inputData, audioCtx.sampleRate, 16000);
       const pcmData = float32ToInt16(downsampled);
-      wsRef.current.send(pcmData);
+      session.ws.send(pcmData);
     };
 
     source.connect(processor);
-    processor.connect(audioCtx.destination);
-  };
+    processor.connect(gain);
+    gain.connect(audioCtx.destination);
+  }, []);
+
+  const connectSpeakerStream = useCallback((speaker: Speaker, stream: MediaStream, language: string) => {
+    const audioCtx = new AudioContext({ sampleRate: 16000 });
+    sessionsRef.current[speaker].audioContext = audioCtx;
+
+    const wsUrl = getWebSocketUrl();
+    const ws = new WebSocket(wsUrl);
+    sessionsRef.current[speaker].ws = ws;
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'config', language }));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'ready') {
+          startAudioProcessing(speaker, audioCtx, stream);
+          return;
+        }
+
+        if (data.type === 'transcript') {
+          handleTranscript(speaker, data.text || '', data.is_final || false);
+          return;
+        }
+
+        if (data.type === 'error') {
+          setError(`STT error (${speaker}): ${data.text}`);
+        }
+      } catch {
+        // Ignore malformed websocket messages.
+      }
+    };
+
+    ws.onerror = () => {
+      if (stopRequestedRef.current || !isListeningRef.current) {
+        return;
+      }
+      setError(`WebSocket connection error: ${wsUrl}`);
+    };
+  }, [handleTranscript, startAudioProcessing]);
+
+  const startListening = useCallback(async (language: string = 'zh') => {
+    setError(null);
+    stopRequestedRef.current = false;
+
+    try {
+      const micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      });
+      micStreamRef.current = micStream;
+
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: true,
+      });
+
+      displayStream.getVideoTracks().forEach((track) => track.stop());
+      if (displayStream.getAudioTracks().length === 0) {
+        throw new Error('Screen/tab audio is required to capture the interviewer.');
+      }
+
+      displayStreamRef.current = displayStream;
+      setHasSystemAudio(true);
+
+      isListeningRef.current = true;
+      setIsListening(true);
+
+      connectSpeakerStream('user', micStream, language);
+      connectSpeakerStream('interviewer', displayStream, language);
+    } catch (err) {
+      console.error('Audio capture error:', err);
+      const message = err instanceof Error ? err.message : 'Failed to start audio capture.';
+      setError(message);
+      stopRequestedRef.current = true;
+      isListeningRef.current = false;
+      setIsListening(false);
+      setHasSystemAudio(false);
+      teardownSession('user');
+      teardownSession('interviewer');
+      if (micStreamRef.current) {
+        micStreamRef.current.getTracks().forEach((track) => track.stop());
+        micStreamRef.current = null;
+      }
+      if (displayStreamRef.current) {
+        displayStreamRef.current.getTracks().forEach((track) => track.stop());
+        displayStreamRef.current = null;
+      }
+    }
+  }, [connectSpeakerStream, teardownSession]);
 
   const stopListening = useCallback(() => {
     isListeningRef.current = false;
+    stopRequestedRef.current = true;
 
-    // Send stop signal
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      try {
-        wsRef.current.send(JSON.stringify({ type: 'stop' }));
-      } catch {
-        // ignore
+    (['user', 'interviewer'] as Speaker[]).forEach((speaker) => {
+      const session = sessionsRef.current[speaker];
+      if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+        try {
+          session.ws.send(JSON.stringify({ type: 'stop' }));
+        } catch {
+          // ignore
+        }
       }
-      setTimeout(() => {
-        wsRef.current?.close();
-        wsRef.current = null;
-      }, 1500);
-    }
+    });
 
-    if (processorRef.current) {
-      processorRef.current.disconnect();
-      processorRef.current = null;
-    }
-
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
-    }
+    setTimeout(() => {
+      teardownSession('user');
+      teardownSession('interviewer');
+    }, 1500);
 
     if (micStreamRef.current) {
       micStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -281,31 +346,28 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
       displayStreamRef.current = null;
     }
 
+    setHasSystemAudio(false);
     setIsListening(false);
     setInterimTranscript('');
-    setHasSystemAudio(false);
-  }, []);
+  }, [teardownSession]);
 
   const resetTranscript = useCallback(() => {
+    committedRef.current = { interviewer: '', user: '' };
+    liveRef.current = { interviewer: '', user: '' };
     setTranscript('');
+    setInterviewerTranscript('');
+    setUserTranscript('');
     setInterimTranscript('');
     setSegments([]);
     segmentIdRef.current = 0;
   }, []);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
+      stopRequestedRef.current = true;
       isListeningRef.current = false;
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-      if (processorRef.current) {
-        processorRef.current.disconnect();
-      }
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
-      }
+      teardownSession('user');
+      teardownSession('interviewer');
       if (micStreamRef.current) {
         micStreamRef.current.getTracks().forEach((track) => track.stop());
       }
@@ -313,11 +375,13 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
         displayStreamRef.current.getTracks().forEach((track) => track.stop());
       }
     };
-  }, []);
+  }, [teardownSession]);
 
   return {
     isListening,
     transcript,
+    interviewerTranscript,
+    userTranscript,
     interimTranscript,
     segments,
     startListening,
