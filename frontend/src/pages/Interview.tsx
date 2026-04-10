@@ -22,7 +22,7 @@ export default function Interview() {
 
   const {
     isListening,
-    transcript,
+    interviewerTranscript,
     interimTranscript,
     segments,
     startListening,
@@ -73,19 +73,25 @@ export default function Interview() {
   // Text-based question detection with debounce
   useEffect(() => {
     if (!isListening) return;
-    if (segments.length === 0) return;
+    if (!interviewerTranscript.trim()) return;
 
-    const lastSegment = segments[segments.length - 1];
-    if (lastSegment.id <= lastProcessedSegmentIdRef.current) return;
+    const lastInterviewerSegment = [...segments]
+      .reverse()
+      .find((segment) => segment.speaker === 'interviewer');
+    if (lastInterviewerSegment && lastInterviewerSegment.id <= lastProcessedSegmentIdRef.current) {
+      return;
+    }
 
     if (textDebounceRef.current) {
       clearTimeout(textDebounceRef.current);
     }
 
     textDebounceRef.current = setTimeout(() => {
-      lastProcessedSegmentIdRef.current = lastSegment.id;
+      if (lastInterviewerSegment) {
+        lastProcessedSegmentIdRef.current = lastInterviewerSegment.id;
+      }
       if (!isProcessing) {
-        processTranscript(transcript);
+        processTranscript(interviewerTranscript);
       }
     }, 3000);
 
@@ -94,7 +100,7 @@ export default function Interview() {
         clearTimeout(textDebounceRef.current);
       }
     };
-  }, [segments, isListening, transcript, processTranscript, isProcessing]);
+  }, [segments, isListening, interviewerTranscript, processTranscript, isProcessing]);
 
   const handleStart = useCallback(() => {
     setElapsed(0);

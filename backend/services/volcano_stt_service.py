@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 VOLC_APP_ID = os.environ.get("VOLC_APP_ID", "")
 VOLC_ACCESS_TOKEN = os.environ.get("VOLC_ACCESS_TOKEN", "")
-VOLC_RESOURCE_ID = "volc.seedasr.sauc.concurrent"
+VOLC_RESOURCE_ID = os.environ.get("VOLC_RESOURCE_ID", "volc.bigasr.sauc.concurrent")
 VOLC_WS_URL = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel"
 
 # Protocol constants for Volcano Engine binary protocol
@@ -36,7 +36,6 @@ def _build_header(
     message_type: int,
     serial_method: int = JSON_SERIALIZATION,
     compression: int = GZIP_COMPRESSION,
-    extension: bytes = b"\x00\x00\x00\x00",
 ) -> bytes:
     """Build the 4-byte binary header for Volcano protocol."""
     header = bytearray()
@@ -48,14 +47,13 @@ def _build_header(
     header.append((compression << 4) | 0x00)
     # byte 3: reserved
     header.append(0x00)
-    # extension header (4 bytes)
-    header.extend(extension)
     return bytes(header)
 
 
 def build_full_client_request(
     language: str = "zh-CN",
     uid: str = "",
+    sequence: int = 1,
 ) -> bytes:
     """Build the initial full client request with config."""
     if not uid:
@@ -74,20 +72,18 @@ def build_full_client_request(
             "uid": uid,
         },
         "audio": {
-            "format": "opus",
-            "codec": "opus",
+            "format": "pcm",
             "rate": 16000,
             "bits": 16,
             "channel": 1,
+            "language": resolved_lang,
         },
         "request": {
             "model_name": "bigmodel",
+            "enable_itn": True,
+            "enable_ddc": False,
             "enable_punc": True,
-            "result_type": "single",
-            "vad": {
-                "end_window_size": 800,
-            },
-            "language": resolved_lang,
+            "show_utterances": True,
         },
     }
 
@@ -100,24 +96,23 @@ def build_full_client_request(
         compression=GZIP_COMPRESSION,
     )
 
+    header = bytearray(header)
+    header[2] = (GZIP_COMPRESSION << 4) | POS_SEQUENCE
+
+    sequence_bytes = int(sequence).to_bytes(4, "big", signed=True)
     # payload size (4 bytes big-endian)
     size_bytes = len(compressed).to_bytes(4, "big")
 
-    return header + size_bytes + compressed
+    return bytes(header) + sequence_bytes + size_bytes + compressed
 
 
-def build_audio_request(audio_data: bytes, is_last: bool = False) -> bytes:
+def build_audio_request(audio_data: bytes, sequence: int, is_last: bool = False) -> bytes:
     """Build an audio-only request frame."""
-    seq_flag = NEG_SEQUENCE if is_last else POS_SEQUENCE
-
     header = bytearray()
     header.append((PROTOCOL_VERSION << 4) | HEADER_SIZE)
     header.append((AUDIO_ONLY_REQUEST << 4) | NO_SERIALIZATION)
-    header.append((NO_COMPRESSION << 4) | seq_flag)
+    header.append((NO_COMPRESSION << 4) | NO_SEQUENCE)
     header.append(0x00)
-    # extension
-    header.extend(b"\x00\x00\x00\x00")
-    # payload size
     size_bytes = len(audio_data).to_bytes(4, "big")
 
     return bytes(header) + size_bytes + audio_data
@@ -134,8 +129,8 @@ def parse_server_response(data: bytes) -> dict:
     compression = (data[2] >> 4) & 0x0F
     seq_flag = data[2] & 0x0F
 
-    # Skip header (4 bytes) + extension (4 bytes)
-    offset = 8
+    header_size = (data[0] & 0x0F) * 4
+    offset = header_size
 
     if msg_type == SERVER_ACK:
         return {"type": "ack"}
@@ -161,15 +156,13 @@ def parse_server_response(data: bytes) -> dict:
         return {"type": "error", "code": -1, "text": "Unknown error"}
 
     if msg_type == FULL_SERVER_RESPONSE:
-        # Read payload size (4 bytes)
-        if len(data) < offset + 4:
+        if len(data) < offset + 8:
             return {"type": "error", "text": "Incomplete response"}
 
-        # Check for sequence number
-        if seq_flag in (POS_SEQUENCE, NEG_SEQUENCE, NEG_WITH_SEQUENCE):
-            # sequence number (4 bytes)
-            if len(data) >= offset + 4:
-                offset += 4
+        # Volcano currently includes a sequence number ahead of the payload
+        # size for full server responses, even when the low nibble doesn't
+        # advertise it consistently.
+        offset += 4
 
         payload_size = int.from_bytes(data[offset : offset + 4], "big")
         offset += 4
@@ -183,10 +176,14 @@ def parse_server_response(data: bytes) -> dict:
         payload_bytes = data[offset : offset + payload_size]
 
         if compression == GZIP_COMPRESSION:
-            try:
-                payload_bytes = gzip.decompress(payload_bytes)
-            except Exception:
-                pass
+            # Some server responses set the compression bit but still return
+            # plain JSON. Only attempt gzip decoding when the payload carries
+            # the gzip magic header.
+            if payload_bytes[:2] == b"\x1f\x8b":
+                try:
+                    payload_bytes = gzip.decompress(payload_bytes)
+                except Exception:
+                    pass
 
         if serial_method == JSON_SERIALIZATION:
             try:
@@ -201,5 +198,16 @@ def parse_server_response(data: bytes) -> dict:
 
 
 def get_ws_url() -> str:
-    """Get the WebSocket URL with auth parameters."""
-    return f"{VOLC_WS_URL}?appid={VOLC_APP_ID}&token={VOLC_ACCESS_TOKEN}&cluster={VOLC_RESOURCE_ID}"
+    """Get the WebSocket URL for Volcano streaming STT."""
+    return VOLC_WS_URL
+
+
+def get_ws_connect_config() -> dict:
+    """Build WebSocket connection settings required by Volcano header auth."""
+    return {
+        "additional_headers": {
+            "X-Api-App-Key": VOLC_APP_ID,
+            "X-Api-Access-Key": VOLC_ACCESS_TOKEN,
+            "X-Api-Resource-Id": VOLC_RESOURCE_ID,
+        }
+    }
