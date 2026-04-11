@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildTranscriptContext,
   extractLatestInterviewerQuestion,
   getStreamingAnswerText,
   buildPrefillCandidate,
@@ -27,6 +28,21 @@ test('returns empty string when there is no interviewer line', () => {
   const transcript = '[user] 我想先做个自我介绍。';
 
   assert.equal(extractLatestInterviewerQuestion(transcript), '');
+});
+
+test('buildTranscriptContext includes recent final segments plus interviewer live text', () => {
+  const context = buildTranscriptContext({
+    segments: [
+      { speaker: 'user', text: '你好', id: 1 },
+      { speaker: 'interviewer', text: '你最大的缺点', id: 2 },
+    ],
+    liveInterviewerText: '你最大的缺点是什么',
+  });
+
+  assert.equal(
+    context,
+    '[user] 你好\n[interviewer] 你最大的缺点\n[interviewer] 你最大的缺点是什么',
+  );
 });
 
 test('treats plain streamed content as the answer body', () => {

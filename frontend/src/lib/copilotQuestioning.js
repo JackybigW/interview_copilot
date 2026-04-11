@@ -19,6 +19,16 @@ export function normalizeQuestionText(text) {
     .replace(/[\s\u3000,，。！？!?；;:：、]+/g, '');
 }
 
+export function buildTranscriptContext({ segments, liveInterviewerText = '', maxSegments = 8 }) {
+  const finalLines = segments
+    .slice(-maxSegments)
+    .map((segment) => `[${segment.speaker}] ${segment.text}`);
+  const liveLine = liveInterviewerText.trim()
+    ? [`[interviewer] ${liveInterviewerText.trim()}`]
+    : [];
+  return [...finalLines, ...liveLine].join('\n');
+}
+
 export function buildPrefillCandidate(interviewerText) {
   const trimmed = String(interviewerText ?? '').trim();
   if (!trimmed) {
