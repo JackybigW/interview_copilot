@@ -1,78 +1,40 @@
 export const QUESTION_CUES = [
-  '为什么',
-  '怎么',
-  '如何',
-  '什么',
-  '哪',
-  '谁',
-  '多少',
   '吗',
-  '呢',
-  '是否',
-  '能否',
-  '可以',
-  '要不要',
-  '请',
-  '谈谈',
-  '说说',
-  'why',
+  '么',
+  '什么',
+  '为什么',
   'how',
   'what',
-  'which',
-  'who',
-  'where',
+  'why',
   'when',
-  'can you',
-  'could you',
-  'would you',
-  'do you',
-  'is',
-  'are',
+  'tell me',
+  '?',
+  '？',
 ];
 
 export function normalizeQuestionText(text) {
   return String(text ?? '')
     .trim()
     .toLowerCase()
-    .replace(/[\s\u3000\p{P}]+/gu, '');
-}
-
-function splitQuestionSegments(text) {
-  return String(text ?? '')
-    .split(/[\n\r]+|(?<=[。！？!?；;])/u)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-}
-
-function containsQuestionCue(text) {
-  const normalized = normalizeQuestionText(text);
-  return QUESTION_CUES.some((cue) => normalized.includes(normalizeQuestionText(cue)));
-}
-
-function getLatestQuestionSegment(text) {
-  const segments = splitQuestionSegments(text);
-
-  for (let index = segments.length - 1; index >= 0; index -= 1) {
-    const segment = segments[index];
-    if (containsQuestionCue(segment)) {
-      return segment;
-    }
-  }
-
-  return '';
+    .replace(/[\s\u3000,，。！？!?；;:：、]+/g, '');
 }
 
 export function buildPrefillCandidate(interviewerText) {
-  const latestSegment = getLatestQuestionSegment(interviewerText);
-  if (!latestSegment) {
+  const trimmed = String(interviewerText ?? '').trim();
+  if (!trimmed) {
     return '';
   }
 
-  if (normalizeQuestionText(latestSegment).length < 8) {
+  if (normalizeQuestionText(trimmed).length < 8) {
     return '';
   }
 
-  return latestSegment;
+  const loweredText = trimmed.toLowerCase();
+  if (!QUESTION_CUES.some((cue) => loweredText.includes(cue))) {
+    return '';
+  }
+
+  return trimmed;
 }
 
 export function isStablePrefillCandidate({
@@ -80,9 +42,12 @@ export function isStablePrefillCandidate({
   nextCandidate,
   seenCount,
 }) {
+  if (!previousCandidate || !nextCandidate) {
+    return false;
+  }
+
   return (
-    normalizeQuestionText(previousCandidate) ===
-      normalizeQuestionText(nextCandidate) &&
+    normalizeQuestionText(previousCandidate) === normalizeQuestionText(nextCandidate) &&
     seenCount + 1 >= 2
   );
 }

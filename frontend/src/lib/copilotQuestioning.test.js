@@ -42,51 +42,46 @@ test('extracts the answer body when legacy tagged content is received', () => {
 });
 
 test('returns an empty prefill candidate for short non-question partials', () => {
-  assert.equal(buildPrefillCandidate('我在'), '');
-});
-
-test('keeps the latest interviewer partial question', () => {
+  assert.equal(buildPrefillCandidate('嗯'), '');
+  assert.equal(buildPrefillCandidate('这个'), '');
   assert.equal(
-    buildPrefillCandidate('先聊一下你的经历。你为什么想加入我们团队'),
-    '你为什么想加入我们团队',
+    buildPrefillCandidate('咱开始聊题，第一个，你最大的缺点是什么'),
+    '咱开始聊题，第一个，你最大的缺点是什么',
   );
 });
 
 test('requires repeated matching snapshots before a prefill candidate is stable', () => {
   assert.equal(
     isStablePrefillCandidate({
-      previousCandidate: '你为什么想加入我们团队',
-      nextCandidate: '你为什么想加入我们团队',
-      seenCount: 0,
+      previousCandidate: '你最大的缺点是什么',
+      nextCandidate: '你最大的缺点是什么',
+      seenCount: 1,
     }),
-    false,
+    true,
   );
 
   assert.equal(
     isStablePrefillCandidate({
-      previousCandidate: '你为什么想加入我们团队',
-      nextCandidate: '你为什么想加入我们团队',
+      previousCandidate: '你最大的缺点是',
+      nextCandidate: '你最大的缺点是什么',
       seenCount: 1,
     }),
-    true,
+    false,
   );
 });
 
 test('accepts punctuation-only final refinements', () => {
   assert.equal(
     shouldPromoteFinalQuestion({
-      prefillQuestion: '你为什么想加入我们团队',
-      finalQuestion: '你为什么想加入我们团队？',
+      prefillQuestion: '你最大的缺点是什么',
+      finalQuestion: '你最大的缺点是什么？',
     }),
     true,
   );
-});
-
-test('rejects materially different final questions', () => {
   assert.equal(
     shouldPromoteFinalQuestion({
-      prefillQuestion: '你为什么想加入我们团队',
-      finalQuestion: '你的缺点是什么',
+      prefillQuestion: '你最大的缺点是什么',
+      finalQuestion: '你为什么想加入我们公司？',
     }),
     false,
   );
