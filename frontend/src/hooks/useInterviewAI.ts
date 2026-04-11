@@ -1,5 +1,9 @@
 import { useState, useRef, useCallback } from 'react';
 import { getAPIBaseURL } from '@/lib/config';
+import {
+  extractLatestInterviewerQuestion,
+  getStreamingAnswerText,
+} from '@/lib/copilotQuestioning.js';
 
 export interface DetectedQuestion {
   id: number;
@@ -11,6 +15,7 @@ export interface DetectedQuestion {
 
 interface UseInterviewAIReturn {
   questions: DetectedQuestion[];
+  currentQuestion: string;
   currentAnswer: string;
   isProcessing: boolean;
   /** Set resume/JD concise context and language */
@@ -29,6 +34,7 @@ interface UseInterviewAIReturn {
  */
 export function useInterviewAI(): UseInterviewAIReturn {
   const [questions, setQuestions] = useState<DetectedQuestion[]>([]);
+  const [currentQuestion, setCurrentQuestion] = useState('');
   const [currentAnswer, setCurrentAnswer] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -48,29 +54,6 @@ export function useInterviewAI(): UseInterviewAIReturn {
     [],
   );
 
-  const parseAndAddQuestion = useCallback((content: string) => {
-    if (
-      content.includes('[QUESTION]') &&
-      content.includes('[ANSWER]')
-    ) {
-      const questionMatch = content.match(
-        /\[QUESTION\]:\s*(.*?)(?:\n|\[ANSWER\])/s,
-      );
-      const answerMatch = content.match(/\[ANSWER\]:\s*([\s\S]*)/);
-
-      if (questionMatch && answerMatch) {
-        const newQuestion: DetectedQuestion = {
-          id: questionIdRef.current++,
-          question: questionMatch[1].trim(),
-          answer: answerMatch[1].trim(),
-          isStreaming: false,
-          timestamp: Date.now(),
-        };
-        setQuestions((prev) => [...prev, newQuestion]);
-      }
-    }
-  }, []);
-
   /**
    * Process transcript via Gemini Flash streaming to detect questions and generate answers.
    * Uses SSE streaming from the backend for low-latency responses.
@@ -78,17 +61,17 @@ export function useInterviewAI(): UseInterviewAIReturn {
   const processTranscript = useCallback(
     (fullTranscript: string) => {
       if (!fullTranscript.trim()) return;
-      if (fullTranscript === lastProcessedRef.current) return;
       if (processingLockRef.current) return;
+      if (fullTranscript.trim().length < 10) return;
 
-      const newText = fullTranscript
-        .slice(lastProcessedRef.current.length)
-        .trim();
-      if (newText.length < 10) return;
+      const latestQuestion = extractLatestInterviewerQuestion(fullTranscript);
+      if (!latestQuestion) return;
+      if (latestQuestion === lastProcessedRef.current) return;
 
-      lastProcessedRef.current = fullTranscript;
+      lastProcessedRef.current = latestQuestion;
       processingLockRef.current = true;
       setIsProcessing(true);
+      setCurrentQuestion(latestQuestion);
       setCurrentAnswer('');
 
       const recentContext = fullTranscript.slice(-2000);
@@ -100,14 +83,11 @@ export function useInterviewAI(): UseInterviewAIReturn {
       (async () => {
         let streamedContent = '';
         try {
-          // Build the question detection prompt as the "question"
-          const questionPrompt = `Analyze this interview transcript and detect if the interviewer asked a new question. If yes, respond with [QUESTION]: <question> and [ANSWER]: <answer>. If no question, respond with [NO_QUESTION].\n\nTranscript:\n"${recentContext}"`;
-
           const response = await fetch(`${baseUrl}/api/v1/interview/generate-answer`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              question: questionPrompt,
+              question: latestQuestion,
               resume_context: resumeContext,
               jd_context: jdContext,
               transcript_context: recentContext,
@@ -140,27 +120,38 @@ export function useInterviewAI(): UseInterviewAIReturn {
                   continue;
                 }
                 streamedContent += data;
-                setCurrentAnswer(streamedContent);
+                setCurrentAnswer(getStreamingAnswerText(streamedContent));
               }
             }
           }
 
-          // Parse the complete response for question/answer
-          parseAndAddQuestion(streamedContent);
+          const finalAnswer = getStreamingAnswerText(streamedContent);
+          if (finalAnswer) {
+            const newQuestion: DetectedQuestion = {
+              id: questionIdRef.current++,
+              question: latestQuestion,
+              answer: finalAnswer,
+              isStreaming: false,
+              timestamp: Date.now(),
+            };
+            setQuestions((prev) => [...prev, newQuestion]);
+          }
         } catch (err) {
           console.error('AI processing error:', err);
         } finally {
           processingLockRef.current = false;
           setIsProcessing(false);
+          setCurrentQuestion('');
           setCurrentAnswer('');
         }
       })();
     },
-    [parseAndAddQuestion],
+    [],
   );
 
   const clearQuestions = useCallback(() => {
     setQuestions([]);
+    setCurrentQuestion('');
     setCurrentAnswer('');
     questionIdRef.current = 0;
     lastProcessedRef.current = '';
@@ -168,6 +159,7 @@ export function useInterviewAI(): UseInterviewAIReturn {
 
   return {
     questions,
+    currentQuestion,
     currentAnswer,
     isProcessing,
     setContext,

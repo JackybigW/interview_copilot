@@ -1,5 +1,12 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { getAPIBaseURL } from '@/lib/config';
+import {
+  DUPLICATE_SEGMENT_SUPPRESSION_MS,
+  getSpeakersToFinalizeOnIncoming,
+  getStaleLiveSpeakers,
+  LIVE_SEGMENT_FINALIZE_MS,
+  shouldIgnoreIncomingSnapshot,
+} from '@/lib/transcriptSegmentation.js';
 
 export type Speaker = 'interviewer' | 'user';
 
@@ -11,12 +18,18 @@ export interface TranscriptSegment {
   speaker: Speaker;
 }
 
+export interface InterimTranscriptSegment {
+  speaker: Speaker;
+  text: string;
+  timestamp: number;
+}
+
 interface UseVolcanoSTTReturn {
   isListening: boolean;
   transcript: string;
   interviewerTranscript: string;
   userTranscript: string;
-  interimTranscript: string;
+  interimSegments: InterimTranscriptSegment[];
   segments: TranscriptSegment[];
   startListening: (language: string) => void;
   stopListening: () => void;
@@ -52,7 +65,7 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
   const [transcript, setTranscript] = useState('');
   const [interviewerTranscript, setInterviewerTranscript] = useState('');
   const [userTranscript, setUserTranscript] = useState('');
-  const [interimTranscript, setInterimTranscript] = useState('');
+  const [interimSegments, setInterimSegments] = useState<InterimTranscriptSegment[]>([]);
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [hasSystemAudio, setHasSystemAudio] = useState(false);
@@ -75,6 +88,22 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
     interviewer: '',
     user: '',
   });
+  const liveTimestampRef = useRef<Record<Speaker, number>>({
+    interviewer: 0,
+    user: 0,
+  });
+  const reconnectAttemptsRef = useRef<Record<Speaker, number>>({
+    interviewer: 0,
+    user: 0,
+  });
+  const finalizeTimersRef = useRef<Record<Speaker, ReturnType<typeof setTimeout> | null>>({
+    interviewer: null,
+    user: null,
+  });
+  const lastFinalizedRef = useRef<Record<Speaker, { text: string; timestamp: number }>>({
+    interviewer: { text: '', timestamp: 0 },
+    user: { text: '', timestamp: 0 },
+  });
 
   const isSupported =
     typeof navigator !== 'undefined' &&
@@ -92,6 +121,19 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
       .filter(Boolean)
       .join(' ');
     setTranscript(combined.trim());
+  }, []);
+
+  const syncInterimSegments = useCallback(() => {
+    const nextSegments = (['interviewer', 'user'] as Speaker[])
+      .filter((speaker) => liveRef.current[speaker].trim())
+      .map((speaker) => ({
+        speaker,
+        text: liveRef.current[speaker].trim(),
+        timestamp: liveTimestampRef.current[speaker] || Date.now(),
+      }))
+      .sort((a, b) => a.timestamp - b.timestamp);
+
+    setInterimSegments(nextSegments);
   }, []);
 
   const getWebSocketUrl = (): string => {
@@ -168,33 +210,112 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
     }
   }, []);
 
+  const clearFinalizeTimer = useCallback((speaker: Speaker) => {
+    const timer = finalizeTimersRef.current[speaker];
+    if (timer) {
+      clearTimeout(timer);
+      finalizeTimersRef.current[speaker] = null;
+    }
+  }, []);
+
+  const finalizeLiveSegment = useCallback((speaker: Speaker, forceText?: string) => {
+    const trimmed = (forceText ?? liveRef.current[speaker]).trim();
+    if (!trimmed) return;
+
+    clearFinalizeTimer(speaker);
+
+    const lastFinalized = lastFinalizedRef.current[speaker];
+    if (
+      lastFinalized.text === trimmed &&
+      Date.now() - lastFinalized.timestamp < DUPLICATE_SEGMENT_SUPPRESSION_MS
+    ) {
+      liveRef.current[speaker] = '';
+      liveTimestampRef.current[speaker] = 0;
+      syncTranscriptState();
+      syncInterimSegments();
+      return;
+    }
+
+    setSegments((prev) => [
+      ...prev,
+      {
+        id: segmentIdRef.current++,
+        text: trimmed,
+        timestamp: liveTimestampRef.current[speaker] || Date.now(),
+        isFinal: true,
+        speaker,
+      },
+    ]);
+
+    committedRef.current[speaker] = `${committedRef.current[speaker]} ${trimmed}`.trim() + ' ';
+    lastFinalizedRef.current[speaker] = {
+      text: trimmed,
+      timestamp: Date.now(),
+    };
+    liveRef.current[speaker] = '';
+    liveTimestampRef.current[speaker] = 0;
+    syncTranscriptState();
+    syncInterimSegments();
+  }, [clearFinalizeTimer, syncInterimSegments, syncTranscriptState]);
+
+  const scheduleFinalizeTimer = useCallback((speaker: Speaker) => {
+    clearFinalizeTimer(speaker);
+    finalizeTimersRef.current[speaker] = window.setTimeout(() => {
+      const staleSpeakers = getStaleLiveSpeakers(
+        liveRef.current,
+        liveTimestampRef.current,
+        Date.now(),
+        LIVE_SEGMENT_FINALIZE_MS,
+      );
+
+      if (staleSpeakers.includes(speaker)) {
+        finalizeLiveSegment(speaker);
+      }
+    }, LIVE_SEGMENT_FINALIZE_MS);
+  }, [clearFinalizeTimer, finalizeLiveSegment]);
+
   const handleTranscript = useCallback((speaker: Speaker, text: string, isFinal: boolean) => {
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    liveRef.current[speaker] = trimmed;
-    setInterimTranscript(`[${speaker}] ${trimmed}`);
-
-    if (isFinal) {
-      committedRef.current[speaker] = `${committedRef.current[speaker]} ${trimmed}`.trim() + ' ';
-      liveRef.current[speaker] = '';
-      setSegments((prev) => [
-        ...prev,
-        {
-          id: segmentIdRef.current++,
-          text: trimmed,
-          timestamp: Date.now(),
-          isFinal: true,
-          speaker,
-        },
-      ]);
-      setInterimTranscript('');
+    const now = Date.now();
+    if (
+      shouldIgnoreIncomingSnapshot({
+        speaker,
+        incomingText: trimmed,
+        liveTextBySpeaker: liveRef.current,
+        lastFinalizedBySpeaker: lastFinalizedRef.current,
+        now,
+      })
+    ) {
+      return;
     }
 
-    syncTranscriptState();
-  }, [syncTranscriptState]);
+    const speakersToFinalize = getSpeakersToFinalizeOnIncoming(
+      liveRef.current,
+      speaker,
+    );
+    speakersToFinalize.forEach((speakerToFinalize) => {
+      finalizeLiveSegment(speakerToFinalize);
+    });
 
-  const startAudioProcessing = useCallback((speaker: Speaker, audioCtx: AudioContext, stream: MediaStream) => {
+    liveRef.current[speaker] = trimmed;
+    liveTimestampRef.current[speaker] = now;
+    syncInterimSegments();
+
+    // Volcano emits cumulative snapshots; finalize on inactivity or speaker change,
+    // not on provider-level "definite" flags.
+    void isFinal;
+    scheduleFinalizeTimer(speaker);
+
+    syncTranscriptState();
+  }, [finalizeLiveSegment, scheduleFinalizeTimer, syncInterimSegments, syncTranscriptState]);
+
+  const startAudioProcessing = useCallback(async (speaker: Speaker, audioCtx: AudioContext, stream: MediaStream) => {
+    if (audioCtx.state === 'suspended') {
+      await audioCtx.resume();
+    }
+
     const source = audioCtx.createMediaStreamSource(stream);
     const processor = audioCtx.createScriptProcessor(4096, 1, 1);
     const gain = audioCtx.createGain();
@@ -236,7 +357,8 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'ready') {
-          startAudioProcessing(speaker, audioCtx, stream);
+          reconnectAttemptsRef.current[speaker] = 0;
+          void startAudioProcessing(speaker, audioCtx, stream);
           return;
         }
 
@@ -246,7 +368,29 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
         }
 
         if (data.type === 'error') {
-          setError(`STT error (${speaker}): ${data.text}`);
+          const message = typeof data.text === 'string' ? data.text : 'STT error';
+          if (message.includes('waiting next packet timeout')) {
+            finalizeLiveSegment(speaker);
+
+            const track = stream.getAudioTracks()[0];
+            if (
+              isListeningRef.current &&
+              track &&
+              track.readyState === 'live' &&
+              reconnectAttemptsRef.current[speaker] < 3
+            ) {
+              reconnectAttemptsRef.current[speaker] += 1;
+              teardownSession(speaker);
+              window.setTimeout(() => {
+                if (isListeningRef.current) {
+                  connectSpeakerStream(speaker, stream, language);
+                }
+              }, 250);
+              return;
+            }
+          }
+
+          setError(`STT error (${speaker}): ${message}`);
         }
       } catch {
         // Ignore malformed websocket messages.
@@ -259,7 +403,10 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
       }
       setError(`WebSocket connection error: ${wsUrl}`);
     };
-  }, [handleTranscript, startAudioProcessing]);
+    ws.onclose = () => {
+      finalizeLiveSegment(speaker);
+    };
+  }, [finalizeLiveSegment, handleTranscript, startAudioProcessing, teardownSession]);
 
   const startListening = useCallback(async (language: string = 'zh') => {
     setError(null);
@@ -270,9 +417,11 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
         audio: {
           channelCount: 1,
           sampleRate: 16000,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
+          // Keep browser echo controls on so speaker audio does not bleed into
+          // the user's microphone track during laptop-speaker interviews.
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
         },
       });
       micStreamRef.current = micStream;
@@ -348,24 +497,31 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
 
     setHasSystemAudio(false);
     setIsListening(false);
-    setInterimTranscript('');
-  }, [teardownSession]);
+    clearFinalizeTimer('user');
+    clearFinalizeTimer('interviewer');
+    setInterimSegments([]);
+  }, [clearFinalizeTimer, teardownSession]);
 
   const resetTranscript = useCallback(() => {
     committedRef.current = { interviewer: '', user: '' };
     liveRef.current = { interviewer: '', user: '' };
+    liveTimestampRef.current = { interviewer: 0, user: 0 };
+    clearFinalizeTimer('user');
+    clearFinalizeTimer('interviewer');
     setTranscript('');
     setInterviewerTranscript('');
     setUserTranscript('');
-    setInterimTranscript('');
+    setInterimSegments([]);
     setSegments([]);
     segmentIdRef.current = 0;
-  }, []);
+  }, [clearFinalizeTimer]);
 
   useEffect(() => {
     return () => {
       stopRequestedRef.current = true;
       isListeningRef.current = false;
+      clearFinalizeTimer('user');
+      clearFinalizeTimer('interviewer');
       teardownSession('user');
       teardownSession('interviewer');
       if (micStreamRef.current) {
@@ -375,14 +531,14 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
         displayStreamRef.current.getTracks().forEach((track) => track.stop());
       }
     };
-  }, [teardownSession]);
+  }, [clearFinalizeTimer, teardownSession]);
 
   return {
     isListening,
     transcript,
     interviewerTranscript,
     userTranscript,
-    interimTranscript,
+    interimSegments,
     segments,
     startListening,
     stopListening,

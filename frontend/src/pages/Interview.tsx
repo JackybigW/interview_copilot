@@ -4,7 +4,6 @@ import { useVolcanoSTT } from '@/hooks/useVolcanoSTT';
 import { useInterviewAI } from '@/hooks/useInterviewAI';
 import TranscriptionPanel from '@/components/TranscriptionPanel';
 import AIResponsePanel from '@/components/AIResponsePanel';
-import QuestionDetector from '@/components/QuestionDetector';
 import { Button } from '@/components/ui/button';
 import { client } from '@/lib/api';
 
@@ -23,7 +22,7 @@ export default function Interview() {
   const {
     isListening,
     interviewerTranscript,
-    interimTranscript,
+    interimSegments,
     segments,
     startListening,
     stopListening,
@@ -35,6 +34,7 @@ export default function Interview() {
 
   const {
     questions,
+    currentQuestion,
     currentAnswer,
     isProcessing,
     setContext,
@@ -42,7 +42,6 @@ export default function Interview() {
     clearQuestions,
   } = useInterviewAI();
 
-  const [selectedQuestionId, setSelectedQuestionId] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastProcessedSegmentIdRef = useRef(-1);
@@ -73,12 +72,12 @@ export default function Interview() {
   // Text-based question detection with debounce
   useEffect(() => {
     if (!isListening) return;
-    if (!interviewerTranscript.trim()) return;
 
     const lastInterviewerSegment = [...segments]
       .reverse()
       .find((segment) => segment.speaker === 'interviewer');
-    if (lastInterviewerSegment && lastInterviewerSegment.id <= lastProcessedSegmentIdRef.current) {
+    if (!lastInterviewerSegment) return;
+    if (lastInterviewerSegment.id <= lastProcessedSegmentIdRef.current) {
       return;
     }
 
@@ -87,20 +86,26 @@ export default function Interview() {
     }
 
     textDebounceRef.current = setTimeout(() => {
-      if (lastInterviewerSegment) {
-        lastProcessedSegmentIdRef.current = lastInterviewerSegment.id;
-      }
       if (!isProcessing) {
-        processTranscript(interviewerTranscript);
+        lastProcessedSegmentIdRef.current = lastInterviewerSegment.id;
+        const lastInterviewerIndex = segments.findIndex(
+          (segment) => segment.id === lastInterviewerSegment.id,
+        );
+        const recentSegments = segments
+          .slice(Math.max(0, lastInterviewerIndex - 7), lastInterviewerIndex + 1)
+          .map((segment) => `[${segment.speaker}] ${segment.text}`)
+          .join('\n');
+
+        processTranscript(recentSegments);
       }
-    }, 3000);
+    }, 800);
 
     return () => {
       if (textDebounceRef.current) {
         clearTimeout(textDebounceRef.current);
       }
     };
-  }, [segments, isListening, interviewerTranscript, processTranscript, isProcessing]);
+  }, [segments, isListening, processTranscript, isProcessing]);
 
   const handleStart = useCallback(() => {
     setElapsed(0);
@@ -152,7 +157,6 @@ export default function Interview() {
     clearQuestions();
     setElapsed(0);
     lastProcessedSegmentIdRef.current = -1;
-    setSelectedQuestionId(null);
   }, [stopListening, resetTranscript, clearQuestions]);
 
   const formatTime = (seconds: number) => {
@@ -230,25 +234,17 @@ export default function Interview() {
           <div className="flex-1 overflow-hidden">
             <TranscriptionPanel
               segments={segments}
-              interimTranscript={interimTranscript}
+              interimSegments={interimSegments}
               isListening={isListening}
             />
           </div>
-          <QuestionDetector
-            questions={questions}
-            onSelectQuestion={setSelectedQuestionId}
-            selectedId={selectedQuestionId}
-          />
         </div>
 
         {/* Right Panel - AI Response */}
         <div className="w-1/2 flex flex-col">
           <AIResponsePanel
-            questions={
-              selectedQuestionId !== null
-                ? questions.filter((q) => q.id === selectedQuestionId)
-                : questions
-            }
+            questions={questions}
+            currentQuestion={currentQuestion}
             currentAnswer={currentAnswer}
             isProcessing={isProcessing}
           />
