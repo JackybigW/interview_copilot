@@ -4,6 +4,9 @@ import test from 'node:test';
 import {
   extractLatestInterviewerQuestion,
   getStreamingAnswerText,
+  buildPrefillCandidate,
+  isStablePrefillCandidate,
+  shouldPromoteFinalQuestion,
 } from './copilotQuestioning.js';
 
 test('extracts the latest interviewer line from labeled transcript context', () => {
@@ -35,5 +38,56 @@ test('extracts the answer body when legacy tagged content is received', () => {
   assert.equal(
     getStreamingAnswerText('[QUESTION]: 你最大的缺点是什么？[ANSWER]: 我会诚实回答。'),
     '我会诚实回答。',
+  );
+});
+
+test('returns an empty prefill candidate for short non-question partials', () => {
+  assert.equal(buildPrefillCandidate('我在'), '');
+});
+
+test('keeps the latest interviewer partial question', () => {
+  assert.equal(
+    buildPrefillCandidate('先聊一下你的经历。你为什么想加入我们团队'),
+    '你为什么想加入我们团队',
+  );
+});
+
+test('requires repeated matching snapshots before a prefill candidate is stable', () => {
+  assert.equal(
+    isStablePrefillCandidate({
+      previousCandidate: '你为什么想加入我们团队',
+      nextCandidate: '你为什么想加入我们团队',
+      seenCount: 0,
+    }),
+    false,
+  );
+
+  assert.equal(
+    isStablePrefillCandidate({
+      previousCandidate: '你为什么想加入我们团队',
+      nextCandidate: '你为什么想加入我们团队',
+      seenCount: 1,
+    }),
+    true,
+  );
+});
+
+test('accepts punctuation-only final refinements', () => {
+  assert.equal(
+    shouldPromoteFinalQuestion({
+      prefillQuestion: '你为什么想加入我们团队',
+      finalQuestion: '你为什么想加入我们团队？',
+    }),
+    true,
+  );
+});
+
+test('rejects materially different final questions', () => {
+  assert.equal(
+    shouldPromoteFinalQuestion({
+      prefillQuestion: '你为什么想加入我们团队',
+      finalQuestion: '你的缺点是什么',
+    }),
+    false,
   );
 });
