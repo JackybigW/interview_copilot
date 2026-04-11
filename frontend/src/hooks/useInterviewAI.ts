@@ -2,7 +2,6 @@ import { useState, useRef, useCallback } from 'react';
 import { getAPIBaseURL } from '@/lib/config';
 import {
   getStreamingAnswerText,
-  shouldPromoteFinalQuestion,
   shouldRestartPrefillRequest,
   shouldStartPrefillRequest,
 } from '@/lib/copilotQuestioning.js';
@@ -112,7 +111,7 @@ export function useInterviewAI(): UseInterviewAIReturn {
       setProcessingPhase(phase);
       setCurrentQuestion(trimmedQuestion);
       setCurrentAnswer((previousAnswer) => {
-        if ((phase === 'prefill' || promoteExisting) && previousAnswer) {
+        if (phase === 'prefill' && previousAnswer) {
           return previousAnswer;
         }
         return '';
@@ -281,16 +280,6 @@ export function useInterviewAI(): UseInterviewAIReturn {
         return;
       }
 
-      if (
-        activePhaseRef.current === 'idle' &&
-        shouldPromoteFinalQuestion({
-          prefillQuestion: lastProcessedRef.current,
-          finalQuestion: trimmedQuestion,
-        })
-      ) {
-        return;
-      }
-
       const shouldRestart = shouldRestartPrefillRequest({
         prefillQuestion: activeQuestionRef.current,
         finalQuestion: trimmedQuestion,
@@ -298,11 +287,7 @@ export function useInterviewAI(): UseInterviewAIReturn {
       const shouldPromoteExisting =
         activePhaseRef.current === 'prefill' && !shouldRestart;
 
-      if (activePhaseRef.current === 'prefill' && !shouldRestart) {
-        stopActiveRequest();
-      } else {
-        stopActiveRequest();
-      }
+      stopActiveRequest();
 
       void streamAnswer({
         question: trimmedQuestion,
