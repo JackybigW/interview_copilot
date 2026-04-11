@@ -53,6 +53,10 @@ export function isStablePrefillCandidate({
 }
 
 export function shouldPromoteFinalQuestion({ prefillQuestion, finalQuestion }) {
+  if (!prefillQuestion || !finalQuestion) {
+    return false;
+  }
+
   return (
     normalizeQuestionText(prefillQuestion) ===
     normalizeQuestionText(finalQuestion)

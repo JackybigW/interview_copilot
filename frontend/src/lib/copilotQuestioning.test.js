@@ -85,4 +85,11 @@ test('accepts punctuation-only final refinements', () => {
     }),
     false,
   );
+  assert.equal(
+    shouldPromoteFinalQuestion({
+      prefillQuestion: '',
+      finalQuestion: '你最大的缺点是什么？',
+    }),
+    false,
+  );
 });
