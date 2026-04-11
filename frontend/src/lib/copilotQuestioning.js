@@ -29,6 +29,20 @@ export function buildTranscriptContext({ segments, liveInterviewerText = '', max
   return [...finalLines, ...liveLine].join('\n');
 }
 
+export function buildFinalizedInterviewerQuestion(segments) {
+  const trailingInterviewerSegments = [];
+
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    const segment = segments[index];
+    if (segment.speaker !== 'interviewer') {
+      break;
+    }
+    trailingInterviewerSegments.unshift(segment.text.trim());
+  }
+
+  return trailingInterviewerSegments.filter(Boolean).join(' ');
+}
+
 export function buildPrefillCandidate(interviewerText) {
   const trimmed = String(interviewerText ?? '').trim();
   if (!trimmed) {

@@ -7,6 +7,7 @@ import AIResponsePanel from '@/components/AIResponsePanel';
 import { Button } from '@/components/ui/button';
 import { client } from '@/lib/api';
 import {
+  buildFinalizedInterviewerQuestion,
   buildPrefillCandidate,
   buildTranscriptContext,
   isStablePrefillCandidate,
@@ -125,17 +126,20 @@ export default function Interview() {
   useEffect(() => {
     if (!isListening) return;
 
-    const lastInterviewerSegment = [...segments]
-      .reverse()
-      .find((segment) => segment.speaker === 'interviewer');
-    if (!lastInterviewerSegment) return;
-    if (lastInterviewerSegment.id <= lastProcessedSegmentIdRef.current) {
+    const latestSegment = segments[segments.length - 1];
+    if (!latestSegment || latestSegment.speaker !== 'interviewer') return;
+    if (latestSegment.id <= lastProcessedSegmentIdRef.current) {
       return;
     }
 
-    lastProcessedSegmentIdRef.current = lastInterviewerSegment.id;
+    const finalizedQuestion = buildFinalizedInterviewerQuestion(
+      segments.slice(Math.max(0, segments.length - 8)),
+    );
+    if (!finalizedQuestion) return;
+
+    lastProcessedSegmentIdRef.current = latestSegment.id;
     finalizeQuestion(
-      lastInterviewerSegment.text,
+      finalizedQuestion,
       buildTranscriptContext({
         segments: segments.slice(Math.max(0, segments.length - 8)),
       }),
@@ -157,6 +161,7 @@ export default function Interview() {
   }, [startListening, state.language, id]);
 
   const handleStop = useCallback(() => {
+    cancelPrefill();
     stopListening();
 
     // Save session data
@@ -184,7 +189,7 @@ export default function Interview() {
         },
       }).catch(console.error);
     }
-  }, [stopListening, id, elapsed, segments, questions]);
+  }, [cancelPrefill, stopListening, id, elapsed, segments, questions]);
 
   const handleReset = useCallback(() => {
     stopListening();

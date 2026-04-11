@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   buildTranscriptContext,
+  buildFinalizedInterviewerQuestion,
   extractLatestInterviewerQuestion,
   getStreamingAnswerText,
   buildPrefillCandidate,
@@ -43,6 +44,16 @@ test('buildTranscriptContext includes recent final segments plus interviewer liv
     context,
     '[user] 你好\n[interviewer] 你最大的缺点\n[interviewer] 你最大的缺点是什么',
   );
+});
+
+test('buildFinalizedInterviewerQuestion combines the trailing interviewer run', () => {
+  const question = buildFinalizedInterviewerQuestion([
+    { speaker: 'user', text: '好的', id: 1 },
+    { speaker: 'interviewer', text: '你最大的缺点', id: 2 },
+    { speaker: 'interviewer', text: '是什么', id: 3 },
+  ]);
+
+  assert.equal(question, '你最大的缺点 是什么');
 });
 
 test('treats plain streamed content as the answer body', () => {
