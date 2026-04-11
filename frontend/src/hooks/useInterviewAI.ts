@@ -244,6 +244,7 @@ export function useInterviewAI(): UseInterviewAIReturn {
           const normalizedQuestion = normalizeQuestionText(trimmedQuestion);
 
           if (finalAnswer) {
+            // Only suppress the immediate duplicate-finalization case for the same utterance.
             const shouldSkipCommit = lastProcessedRef.current === normalizedQuestion;
             const newQuestion: DetectedQuestion = {
               id: questionIdRef.current++,
@@ -254,14 +255,7 @@ export function useInterviewAI(): UseInterviewAIReturn {
             };
 
             setQuestions((previousQuestions) => {
-              const alreadyCommitted =
-                shouldSkipCommit ||
-                previousQuestions.some(
-                  (previousQuestion) =>
-                    normalizeQuestionText(previousQuestion.question) === normalizedQuestion,
-                );
-
-              return alreadyCommitted
+              return shouldSkipCommit
                 ? previousQuestions
                 : [...previousQuestions, newQuestion];
             });
