@@ -7,6 +7,8 @@ import {
   buildPrefillCandidate,
   isStablePrefillCandidate,
   shouldPromoteFinalQuestion,
+  shouldRestartPrefillRequest,
+  shouldStartPrefillRequest,
 } from './copilotQuestioning.js';
 
 test('extracts the latest interviewer line from labeled transcript context', () => {
@@ -91,5 +93,35 @@ test('accepts punctuation-only final refinements', () => {
       finalQuestion: '你最大的缺点是什么？',
     }),
     false,
+  );
+});
+
+test('shouldStartPrefillRequest only starts when candidate changes materially', () => {
+  assert.equal(
+    shouldStartPrefillRequest({
+      activeQuestion: '',
+      nextQuestion: '你最大的缺点是什么',
+      isProcessing: false,
+    }),
+    true,
+  );
+
+  assert.equal(
+    shouldStartPrefillRequest({
+      activeQuestion: '你最大的缺点是什么',
+      nextQuestion: '你最大的缺点是什么？',
+      isProcessing: true,
+    }),
+    false,
+  );
+});
+
+test('shouldRestartPrefillRequest restarts when the final question diverges', () => {
+  assert.equal(
+    shouldRestartPrefillRequest({
+      prefillQuestion: '你最大的缺点是什么',
+      finalQuestion: '你为什么想加入我们公司？',
+    }),
+    true,
   );
 });

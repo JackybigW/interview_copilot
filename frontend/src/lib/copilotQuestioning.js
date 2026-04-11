@@ -63,6 +63,20 @@ export function shouldPromoteFinalQuestion({ prefillQuestion, finalQuestion }) {
   );
 }
 
+export function shouldStartPrefillRequest({
+  activeQuestion,
+  nextQuestion,
+  isProcessing,
+}) {
+  if (!nextQuestion) return false;
+  if (!isProcessing) return true;
+  return normalizeQuestionText(activeQuestion) !== normalizeQuestionText(nextQuestion);
+}
+
+export function shouldRestartPrefillRequest({ prefillQuestion, finalQuestion }) {
+  return !shouldPromoteFinalQuestion({ prefillQuestion, finalQuestion });
+}
+
 export function extractLatestInterviewerQuestion(transcriptContext) {
   const lines = transcriptContext
     .split('\n')
