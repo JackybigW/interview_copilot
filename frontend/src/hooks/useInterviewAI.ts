@@ -242,10 +242,11 @@ export function useInterviewAI(): UseInterviewAIReturn {
         if (phase === 'final') {
           const finalAnswer = getStreamingAnswerText(streamedContent);
           const normalizedQuestion = normalizeQuestionText(trimmedQuestion);
+          const finalCommitKey = `${normalizedQuestion}::${transcriptContext.trim()}`;
 
           if (finalAnswer) {
-            // Only suppress the immediate duplicate-finalization case for the same utterance.
-            const shouldSkipCommit = lastProcessedRef.current === normalizedQuestion;
+            // Scope dedupe to the same finalized utterance, not every matching question in session history.
+            const shouldSkipCommit = lastProcessedRef.current === finalCommitKey;
             const newQuestion: DetectedQuestion = {
               id: questionIdRef.current++,
               question: trimmedQuestion,
@@ -259,7 +260,7 @@ export function useInterviewAI(): UseInterviewAIReturn {
                 ? previousQuestions
                 : [...previousQuestions, newQuestion];
             });
-            lastProcessedRef.current = normalizedQuestion;
+            lastProcessedRef.current = finalCommitKey;
           }
 
           resetActiveState();
