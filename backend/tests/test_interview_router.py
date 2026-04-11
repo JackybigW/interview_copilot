@@ -121,6 +121,36 @@ async def test_generate_answer_logs_stream_timing(monkeypatch, caplog):
 
 
 @pytest.mark.asyncio
+async def test_generate_answer_logs_prefill_request_metadata(monkeypatch, caplog):
+    import routers.interview as interview
+
+    caplog.set_level(logging.INFO)
+
+    async def fake_stream(*, question, context, transcript_context, language):
+        yield "chunk"
+
+    monkeypatch.setattr(interview, "generate_answer_stream", fake_stream)
+
+    response = await interview.generate_answer(
+        interview.GenerateAnswerRequest(
+            question="你最大的缺点是什么？",
+            resume_context="resume",
+            jd_context="jd",
+            transcript_context="recent transcript",
+            language="zh",
+            request_phase="prefill",
+            request_generation=3,
+        )
+    )
+
+    async for _ in response.body_iterator:
+        pass
+
+    assert "request_phase=prefill" in caplog.text
+    assert "request_generation=3" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_update_session_only_updates_title(monkeypatch):
     import routers.interview as interview
 

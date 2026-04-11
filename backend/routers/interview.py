@@ -63,6 +63,8 @@ class GenerateAnswerRequest(BaseModel):
     jd_context: str = ""
     transcript_context: str = ""
     language: str = "en"
+    request_phase: str = "final"
+    request_generation: int = 0
 
 
 class RefineAnalysisRequest(BaseModel):
@@ -256,8 +258,10 @@ async def generate_answer(request: GenerateAnswerRequest):
         context_chars = len(context)
         transcript_chars = len(request.transcript_context)
         logger.info(
-            "copilot_answer request_type=generate_answer model=%s question_chars=%d context_chars=%d transcript_chars=%d language=%s",
+            "copilot_answer request_type=generate_answer model=%s request_phase=%s request_generation=%d question_chars=%d context_chars=%d transcript_chars=%d language=%s",
             GEMINI_FLASH_MODEL,
+            request.request_phase,
+            request.request_generation,
             question_chars,
             context_chars,
             transcript_chars,
@@ -278,8 +282,10 @@ async def generate_answer(request: GenerateAnswerRequest):
                     if first_chunk_ms is None:
                         first_chunk_ms = (time.perf_counter() - start) * 1000
                         logger.info(
-                            "copilot_answer first_chunk model=%s ttfc_ms=%.1f question_chars=%d context_chars=%d transcript_chars=%d",
+                            "copilot_answer first_chunk model=%s request_phase=%s request_generation=%d ttfc_ms=%.1f question_chars=%d context_chars=%d transcript_chars=%d",
                             GEMINI_FLASH_MODEL,
+                            request.request_phase,
+                            request.request_generation,
                             first_chunk_ms,
                             question_chars,
                             context_chars,
@@ -299,8 +305,10 @@ async def generate_answer(request: GenerateAnswerRequest):
             finally:
                 total_ms = (time.perf_counter() - start) * 1000
                 logger.info(
-                    "copilot_answer complete model=%s total_ms=%.1f ttfc_ms=%s chunks=%d question_chars=%d context_chars=%d transcript_chars=%d",
+                    "copilot_answer complete model=%s request_phase=%s request_generation=%d total_ms=%.1f ttfc_ms=%s chunks=%d question_chars=%d context_chars=%d transcript_chars=%d",
                     GEMINI_FLASH_MODEL,
+                    request.request_phase,
+                    request.request_generation,
                     total_ms,
                     f"{first_chunk_ms:.1f}" if first_chunk_ms is not None else "n/a",
                     chunk_count,
