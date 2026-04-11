@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from 'react';
 import { getAPIBaseURL } from '@/lib/config';
 import {
   getStreamingAnswerText,
+  normalizeQuestionText,
   shouldRestartPrefillRequest,
   shouldStartPrefillRequest,
 } from '@/lib/copilotQuestioning.js';
@@ -14,7 +15,7 @@ export interface DetectedQuestion {
   timestamp: number;
 }
 
-type ProcessingPhase = 'idle' | 'prefill' | 'final';
+export type ProcessingPhase = 'idle' | 'prefill' | 'final';
 
 interface StartProcessingInput {
   question: string;
@@ -58,6 +59,7 @@ export function useInterviewAI(): UseInterviewAIReturn {
   const requestGenerationRef = useRef(0);
   const activeQuestionRef = useRef('');
   const activePhaseRef = useRef<ProcessingPhase>('idle');
+  const currentAnswerRef = useRef('');
   const contextRef = useRef({
     resumeContext: '',
     jdContext: '',
@@ -74,10 +76,16 @@ export function useInterviewAI(): UseInterviewAIReturn {
   const resetActiveState = useCallback(() => {
     activeQuestionRef.current = '';
     activePhaseRef.current = 'idle';
+    currentAnswerRef.current = '';
     setIsProcessing(false);
     setProcessingPhase('idle');
     setCurrentQuestion('');
     setCurrentAnswer('');
+  }, []);
+
+  const setDisplayedAnswer = useCallback((answer: string) => {
+    currentAnswerRef.current = answer;
+    setCurrentAnswer(answer);
   }, []);
 
   const stopActiveRequest = useCallback(() => {
@@ -110,12 +118,12 @@ export function useInterviewAI(): UseInterviewAIReturn {
       setIsProcessing(true);
       setProcessingPhase(phase);
       setCurrentQuestion(trimmedQuestion);
-      setCurrentAnswer((previousAnswer) => {
-        if (phase === 'prefill' && previousAnswer) {
-          return previousAnswer;
-        }
-        return '';
-      });
+      const preservedAnswer = promoteExisting ? currentAnswerRef.current : '';
+      const initialAnswer =
+        phase === 'prefill' && currentAnswerRef.current
+          ? currentAnswerRef.current
+          : preservedAnswer;
+      setDisplayedAnswer(initialAnswer);
 
       const recentContext = transcriptContext.slice(-2000);
       const { resumeContext, jdContext, language } = contextRef.current;
@@ -144,7 +152,17 @@ export function useInterviewAI(): UseInterviewAIReturn {
         }
 
         streamedContent += data;
-        setCurrentAnswer(getStreamingAnswerText(streamedContent));
+        const nextAnswer = getStreamingAnswerText(streamedContent);
+        const shouldKeepPromotedAnswerVisible =
+          promoteExisting &&
+          preservedAnswer &&
+          (!nextAnswer ||
+            (preservedAnswer.startsWith(nextAnswer) &&
+              nextAnswer.length < preservedAnswer.length));
+
+        if (!shouldKeepPromotedAnswerVisible) {
+          setDisplayedAnswer(nextAnswer);
+        }
       };
 
       try {
@@ -223,15 +241,33 @@ export function useInterviewAI(): UseInterviewAIReturn {
 
         if (phase === 'final') {
           const finalAnswer = getStreamingAnswerText(streamedContent);
-          const newQuestion: DetectedQuestion = {
-            id: questionIdRef.current++,
-            question: trimmedQuestion,
-            answer: finalAnswer,
-            isStreaming: false,
-            timestamp: Date.now(),
-          };
-          setQuestions((previousQuestions) => [...previousQuestions, newQuestion]);
-          lastProcessedRef.current = trimmedQuestion;
+          const normalizedQuestion = normalizeQuestionText(trimmedQuestion);
+
+          if (finalAnswer) {
+            const shouldSkipCommit = lastProcessedRef.current === normalizedQuestion;
+            const newQuestion: DetectedQuestion = {
+              id: questionIdRef.current++,
+              question: trimmedQuestion,
+              answer: finalAnswer,
+              isStreaming: false,
+              timestamp: Date.now(),
+            };
+
+            setQuestions((previousQuestions) => {
+              const alreadyCommitted =
+                shouldSkipCommit ||
+                previousQuestions.some(
+                  (previousQuestion) =>
+                    normalizeQuestionText(previousQuestion.question) === normalizedQuestion,
+                );
+
+              return alreadyCommitted
+                ? previousQuestions
+                : [...previousQuestions, newQuestion];
+            });
+            lastProcessedRef.current = normalizedQuestion;
+          }
+
           resetActiveState();
           return;
         }
@@ -240,7 +276,7 @@ export function useInterviewAI(): UseInterviewAIReturn {
         setProcessingPhase('prefill');
       }
     },
-    [resetActiveState],
+    [resetActiveState, setDisplayedAnswer],
   );
 
   const startPrefill = useCallback(
@@ -308,6 +344,12 @@ export function useInterviewAI(): UseInterviewAIReturn {
     resetActiveState();
   }, [resetActiveState, stopActiveRequest]);
 
+  const cancelPrefill = useCallback(() => {
+    stopActiveRequest();
+    requestGenerationRef.current += 1;
+    resetActiveState();
+  }, [resetActiveState, stopActiveRequest]);
+
   return {
     questions,
     currentQuestion,
@@ -317,7 +359,7 @@ export function useInterviewAI(): UseInterviewAIReturn {
     setContext,
     startPrefill,
     finalizeQuestion,
-    cancelPrefill: stopActiveRequest,
+    cancelPrefill,
     clearQuestions,
   };
 }

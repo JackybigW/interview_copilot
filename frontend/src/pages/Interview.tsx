@@ -43,6 +43,7 @@ export default function Interview() {
     currentQuestion,
     currentAnswer,
     isProcessing,
+    processingPhase,
     setContext,
     startPrefill,
     finalizeQuestion,
@@ -289,6 +290,7 @@ export default function Interview() {
             currentQuestion={currentQuestion}
             currentAnswer={currentAnswer}
             isProcessing={isProcessing}
+            processingPhase={processingPhase}
           />
         </div>
       </div>

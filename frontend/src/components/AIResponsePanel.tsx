@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { DetectedQuestion } from '@/hooks/useInterviewAI';
+import type { DetectedQuestion, ProcessingPhase } from '@/hooks/useInterviewAI';
 import { getStreamingAnswerText } from '@/lib/copilotQuestioning.js';
 
 interface AIResponsePanelProps {
@@ -7,6 +7,7 @@ interface AIResponsePanelProps {
   currentQuestion: string;
   currentAnswer: string;
   isProcessing: boolean;
+  processingPhase: ProcessingPhase;
 }
 
 const DEMO_QUESTION: DetectedQuestion = {
@@ -74,6 +75,7 @@ export default function AIResponsePanel({
   currentQuestion,
   currentAnswer,
   isProcessing,
+  processingPhase,
 }: AIResponsePanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [viewedIndex, setViewedIndex] = useState(0);
@@ -150,7 +152,7 @@ export default function AIResponsePanel({
               <span className="relative inline-flex h-2 w-2 rounded-full bg-cyan-500" />
             </span>
             <span className="text-xs font-medium text-cyan-400">
-              Thinking...
+              {processingPhase === 'prefill' ? 'Prefilling...' : 'Thinking...'}
             </span>
           </span>
         )}
@@ -240,7 +242,7 @@ export default function AIResponsePanel({
                             style={{ animationDelay: '300ms' }}
                           />
                         </span>
-                        Generating
+                        {processingPhase === 'prefill' ? 'Preparing answer' : 'Generating'}
                       </div>
                     )}
 
