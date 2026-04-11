@@ -223,52 +223,46 @@ export function useInterviewAI(): UseInterviewAIReturn {
           console.error('AI processing error:', err);
         }
       } finally {
-        if (generation !== requestGenerationRef.current) {
-          return;
-        }
-
-        if (abortControllerRef.current === controller) {
-          abortControllerRef.current = null;
-        }
-
-        processingLockRef.current = false;
-        setIsProcessing(false);
-
-        if (!completed) {
-          resetActiveState();
-          return;
-        }
-
-        if (phase === 'final') {
-          const finalAnswer = getStreamingAnswerText(streamedContent);
-          const normalizedQuestion = normalizeQuestionText(trimmedQuestion);
-          const finalCommitKey = `${normalizedQuestion}::${transcriptContext.trim()}`;
-
-          if (finalAnswer) {
-            // Scope dedupe to the same finalized utterance, not every matching question in session history.
-            const shouldSkipCommit = lastProcessedRef.current === finalCommitKey;
-            const newQuestion: DetectedQuestion = {
-              id: questionIdRef.current++,
-              question: trimmedQuestion,
-              answer: finalAnswer,
-              isStreaming: false,
-              timestamp: Date.now(),
-            };
-
-            setQuestions((previousQuestions) => {
-              return shouldSkipCommit
-                ? previousQuestions
-                : [...previousQuestions, newQuestion];
-            });
-            lastProcessedRef.current = finalCommitKey;
+        if (generation === requestGenerationRef.current) {
+          if (abortControllerRef.current === controller) {
+            abortControllerRef.current = null;
           }
 
-          resetActiveState();
-          return;
-        }
+          processingLockRef.current = false;
+          setIsProcessing(false);
 
-        activePhaseRef.current = 'prefill';
-        setProcessingPhase('prefill');
+          if (!completed) {
+            resetActiveState();
+          } else if (phase === 'final') {
+            const finalAnswer = getStreamingAnswerText(streamedContent);
+            const normalizedQuestion = normalizeQuestionText(trimmedQuestion);
+            const finalCommitKey = `${normalizedQuestion}::${transcriptContext.trim()}`;
+
+            if (finalAnswer) {
+              // Scope dedupe to the same finalized utterance, not every matching question in session history.
+              const shouldSkipCommit = lastProcessedRef.current === finalCommitKey;
+              const newQuestion: DetectedQuestion = {
+                id: questionIdRef.current++,
+                question: trimmedQuestion,
+                answer: finalAnswer,
+                isStreaming: false,
+                timestamp: Date.now(),
+              };
+
+              setQuestions((previousQuestions) => {
+                return shouldSkipCommit
+                  ? previousQuestions
+                  : [...previousQuestions, newQuestion];
+              });
+              lastProcessedRef.current = finalCommitKey;
+            }
+
+            resetActiveState();
+          } else {
+            activePhaseRef.current = 'prefill';
+            setProcessingPhase('prefill');
+          }
+        }
       }
     },
     [resetActiveState, setDisplayedAnswer],
