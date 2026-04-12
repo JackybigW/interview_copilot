@@ -73,7 +73,91 @@ async def test_websocket_relay_forwards_direct_result_text(monkeypatch):
 
     assert sent == [
         {"type": "ready"},
-        {"type": "transcript", "text": "你好世界", "is_final": True},
+        {
+            "type": "transcript",
+            "text": "你好世界",
+            "is_final": True,
+            "provider_final": True,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_websocket_relay_forwards_provider_final_flag(monkeypatch):
+    import routers.interview as interview
+
+    sent = []
+
+    class FakeClientWebSocket:
+        async def accept(self):
+            return None
+
+        async def receive_text(self):
+            return '{"type":"config","language":"zh"}'
+
+        async def receive(self):
+            raise interview.WebSocketDisconnect()
+
+        async def send_json(self, payload):
+            sent.append(payload)
+
+    class FakeVolcanoWebSocket:
+        def __init__(self):
+            self._messages = [b"ack", b"result"]
+
+        async def send(self, payload):
+            return None
+
+        async def recv(self):
+            return self._messages.pop(0)
+
+        async def close(self):
+            return None
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not self._messages:
+                raise StopAsyncIteration
+            return self._messages.pop(0)
+
+    async def fake_connect(*args, **kwargs):
+        return FakeVolcanoWebSocket()
+
+    def fake_parse(data):
+        if data == b"ack":
+            return {"type": "ack"}
+        return {
+            "type": "result",
+            "data": {
+                "result": {
+                    "text": "你最大的缺点是什么",
+                    "definite": True,
+                }
+            },
+        }
+
+    monkeypatch.setattr(interview.websockets, "connect", fake_connect)
+    monkeypatch.setattr(interview, "get_ws_url", lambda: "wss://volcano.example/ws")
+    monkeypatch.setattr(interview, "get_ws_connect_config", lambda: {})
+    monkeypatch.setattr(
+        interview,
+        "build_full_client_request",
+        lambda language="zh", uid="", sequence=1: b"init",
+    )
+    monkeypatch.setattr(interview, "parse_server_response", fake_parse)
+
+    await interview.websocket_stt_proxy(FakeClientWebSocket())
+
+    assert sent == [
+        {"type": "ready"},
+        {
+            "type": "transcript",
+            "text": "你最大的缺点是什么",
+            "is_final": True,
+            "provider_final": True,
+        },
     ]
 
 

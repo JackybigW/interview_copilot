@@ -540,7 +540,13 @@ async def websocket_stt_proxy(websocket: WebSocket):
                                         "type": "transcript",
                                         "text": text,
                                         "is_final": is_definite,
+                                        "provider_final": is_definite,
                                     })
+                                    logger.info(
+                                        "stt_transcript_chunk text=%r provider_final=%s",
+                                        text,
+                                        is_definite,
+                                    )
                             nonlocal transcript_event_count, empty_result_count
                             transcript_event_count += transcript_event_count_local
                             if transcript_event_count_local == 0:
