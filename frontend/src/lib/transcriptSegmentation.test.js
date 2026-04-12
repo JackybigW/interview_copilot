@@ -7,6 +7,7 @@ import {
   getSpeakersToFinalizeOnIncoming,
   getStaleLiveSpeakers,
   LIVE_SEGMENT_FINALIZE_MS,
+  stripCommittedPrefixFromSnapshot,
   shouldIgnoreIncomingSnapshot,
 } from './transcriptSegmentation.js';
 
@@ -108,6 +109,26 @@ test('canonicalizes punctuation so spoken duplicates do not reappear', () => {
   assert.equal(
     canonicalizeTranscriptText('你好，面试官等你的问题。'),
     canonicalizeTranscriptText('你好 面试官等你的问题'),
+  );
+});
+
+test('strips the committed prefix from a cumulative snapshot', () => {
+  assert.equal(
+    stripCommittedPrefixFromSnapshot(
+      '面试官你好，我在等你的问题。嗯。',
+      '面试官你好，我在等你的问题',
+    ),
+    '嗯。',
+  );
+});
+
+test('returns empty when a cumulative snapshot is already fully committed', () => {
+  assert.equal(
+    stripCommittedPrefixFromSnapshot(
+      '面试官你好，我在等你的问题。',
+      '面试官你好，我在等你的问题',
+    ),
+    '',
   );
 });
 

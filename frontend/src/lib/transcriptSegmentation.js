@@ -9,6 +9,33 @@ export function canonicalizeTranscriptText(text) {
     .replace(/[.,!?;:'"“”‘’，。！？；：、()（）[\]【】<>《》-]/g, '');
 }
 
+export function stripCommittedPrefixFromSnapshot(incomingText, committedText) {
+  const normalizedIncoming = incomingText.trim();
+  if (!normalizedIncoming) return '';
+
+  const normalizedCommitted = committedText.trim();
+  if (!normalizedCommitted) return normalizedIncoming;
+
+  const canonicalCommitted = canonicalizeTranscriptText(normalizedCommitted);
+  const canonicalIncoming = canonicalizeTranscriptText(normalizedIncoming);
+
+  if (!canonicalCommitted) return normalizedIncoming;
+  if (canonicalIncoming === canonicalCommitted) return '';
+  if (!canonicalIncoming.startsWith(canonicalCommitted)) return normalizedIncoming;
+
+  for (let index = 0; index <= normalizedIncoming.length; index += 1) {
+    const prefix = normalizedIncoming.slice(0, index);
+    if (canonicalizeTranscriptText(prefix) === canonicalCommitted) {
+      return normalizedIncoming
+        .slice(index)
+        .replace(/^[\s\u3000,，。！？!?；;:：、.-]+/, '')
+        .trim();
+    }
+  }
+
+  return normalizedIncoming;
+}
+
 export function getSpeakersToFinalizeOnIncoming(
   liveTextBySpeaker,
   incomingSpeaker,

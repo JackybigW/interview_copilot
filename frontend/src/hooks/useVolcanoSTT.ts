@@ -5,6 +5,7 @@ import {
   getSpeakersToFinalizeOnIncoming,
   getStaleLiveSpeakers,
   LIVE_SEGMENT_FINALIZE_MS,
+  stripCommittedPrefixFromSnapshot,
   shouldIgnoreIncomingSnapshot,
 } from '@/lib/transcriptSegmentation.js';
 
@@ -275,7 +276,10 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
   }, [clearFinalizeTimer, finalizeLiveSegment]);
 
   const handleTranscript = useCallback((speaker: Speaker, text: string, isFinal: boolean) => {
-    const trimmed = text.trim();
+    const trimmed = stripCommittedPrefixFromSnapshot(
+      text,
+      committedRef.current[speaker],
+    );
     if (!trimmed) return;
 
     const now = Date.now();
