@@ -527,6 +527,7 @@ async def websocket_stt_proxy(websocket: WebSocket):
                         result = parse_server_response(msg)
                         if result["type"] == "result":
                             transcript_event_count_local = 0
+                            provider_final_seen = False
                             data = result.get("data", {})
                             direct_result = data.get("result", {})
                             direct_text = direct_result.get("text", "") if isinstance(direct_result, dict) else ""
@@ -536,6 +537,7 @@ async def websocket_stt_proxy(websocket: WebSocket):
                                 is_definite = item.get("definite", False)
                                 if text:
                                     transcript_event_count_local += 1
+                                    provider_final_seen = provider_final_seen or is_definite
                                     await websocket.send_json({
                                         "type": "transcript",
                                         "text": text,
@@ -554,10 +556,11 @@ async def websocket_stt_proxy(websocket: WebSocket):
 
                             if transcript_event_count_local > 0 or empty_result_count <= 8 or empty_result_count % 20 == 0:
                                 logger.info(
-                                    "stt_upstream_result events=%d empty_results=%d direct_text=%r audio_duration=%s payload_keys=%s",
+                                    "stt_upstream_result events=%d empty_results=%d direct_text=%r provider_final=%s audio_duration=%s payload_keys=%s",
                                     transcript_event_count_local,
                                     empty_result_count,
                                     direct_text,
+                                    provider_final_seen,
                                     audio_info.get("duration"),
                                     sorted(data.keys()) if isinstance(data, dict) else [],
                                 )

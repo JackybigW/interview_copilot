@@ -83,9 +83,10 @@ async def test_websocket_relay_forwards_direct_result_text(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_websocket_relay_forwards_provider_final_flag(monkeypatch):
+async def test_websocket_relay_forwards_provider_final_from_payload_msg_result_list(monkeypatch, caplog):
     import routers.interview as interview
 
+    caplog.set_level(logging.INFO)
     sent = []
 
     class FakeClientWebSocket:
@@ -131,9 +132,13 @@ async def test_websocket_relay_forwards_provider_final_flag(monkeypatch):
         return {
             "type": "result",
             "data": {
-                "result": {
-                    "text": "你最大的缺点是什么",
-                    "definite": True,
+                "payload_msg": {
+                    "result": [
+                        {
+                            "text": "你最大的缺点是什么",
+                            "definite": False,
+                        }
+                    ]
                 }
             },
         }
@@ -155,10 +160,12 @@ async def test_websocket_relay_forwards_provider_final_flag(monkeypatch):
         {
             "type": "transcript",
             "text": "你最大的缺点是什么",
-            "is_final": True,
-            "provider_final": True,
+            "is_final": False,
+            "provider_final": False,
         },
     ]
+    assert "stt_upstream_result events=1" in caplog.text
+    assert "provider_final=False" in caplog.text
 
 
 @pytest.mark.asyncio
