@@ -535,9 +535,9 @@ async def websocket_stt_proxy(websocket: WebSocket):
                             for item in _iter_transcript_chunks(result):
                                 text = item.get("text", "")
                                 is_definite = item.get("definite", False)
+                                provider_final_seen = provider_final_seen or is_definite
                                 if text:
                                     transcript_event_count_local += 1
-                                    provider_final_seen = provider_final_seen or is_definite
                                     await websocket.send_json({
                                         "type": "transcript",
                                         "text": text,
