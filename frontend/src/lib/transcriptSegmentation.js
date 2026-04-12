@@ -1,5 +1,16 @@
-export const LIVE_SEGMENT_FINALIZE_MS = 1200;
+export const LIVE_SEGMENT_FINALIZE_MS = 300;
 export const DUPLICATE_SEGMENT_SUPPRESSION_MS = 20_000;
+
+export function shouldFinalizeImmediatelyOnProviderFinal({
+  isFinal,
+  providerFinal,
+}) {
+  return Boolean(isFinal && providerFinal);
+}
+
+export function getFinalizeDelayMs() {
+  return LIVE_SEGMENT_FINALIZE_MS;
+}
 
 export function canonicalizeTranscriptText(text) {
   return text

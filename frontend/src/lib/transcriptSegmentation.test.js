@@ -5,8 +5,10 @@ import {
   canonicalizeTranscriptText,
   DUPLICATE_SEGMENT_SUPPRESSION_MS,
   getSpeakersToFinalizeOnIncoming,
+  getFinalizeDelayMs,
   getStaleLiveSpeakers,
   LIVE_SEGMENT_FINALIZE_MS,
+  shouldFinalizeImmediatelyOnProviderFinal,
   shouldIgnoreIncomingSnapshot,
 } from './transcriptSegmentation.js';
 
@@ -109,6 +111,28 @@ test('canonicalizes punctuation so spoken duplicates do not reappear', () => {
     canonicalizeTranscriptText('你好，面试官等你的问题。'),
     canonicalizeTranscriptText('你好 面试官等你的问题'),
   );
+});
+
+test('provider final chunks finalize immediately', () => {
+  assert.equal(
+    shouldFinalizeImmediatelyOnProviderFinal({
+      isFinal: true,
+      providerFinal: true,
+    }),
+    true,
+  );
+});
+
+test('non-provider-final chunks still use fallback timeout', () => {
+  assert.equal(
+    shouldFinalizeImmediatelyOnProviderFinal({
+      isFinal: false,
+      providerFinal: false,
+    }),
+    false,
+  );
+  assert.equal(getFinalizeDelayMs(), 300);
+  assert.equal(LIVE_SEGMENT_FINALIZE_MS, 300);
 });
 
 test('ignores a repeated finalized utterance even after the short suppression window', () => {
