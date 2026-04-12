@@ -322,10 +322,19 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
         providerFinal,
       })
     ) {
+      console.log('[stt] finalize reason=provider_final', {
+        speaker,
+        text: trimmed,
+      });
       finalizeLiveSegment(speaker, trimmed);
       return;
     }
 
+    console.log('[stt] finalize reason=fallback_timer', {
+      speaker,
+      text: trimmed,
+      delayMs: getFinalizeDelayMs(),
+    });
     scheduleFinalizeTimer(speaker);
   }, [finalizeLiveSegment, scheduleFinalizeTimer, syncInterimSegments, syncTranscriptState]);
 
