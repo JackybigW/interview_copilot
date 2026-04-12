@@ -57,6 +57,8 @@ const EMPTY_SESSION: SessionState = {
   gain: null,
 };
 
+const SHOULD_LOG_STT_FINALIZATION = import.meta.env.DEV;
+
 /**
  * Hook for dual-stream Volcano STT:
  * - Microphone -> `user`
@@ -271,6 +273,12 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
       );
 
       if (staleSpeakers.includes(speaker)) {
+        if (SHOULD_LOG_STT_FINALIZATION) {
+          console.log('[stt] finalize reason=fallback_timer', {
+            speaker,
+            delayMs: getFinalizeDelayMs(),
+          });
+        }
         finalizeLiveSegment(speaker);
       }
     }, getFinalizeDelayMs());
@@ -322,19 +330,16 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
         providerFinal,
       })
     ) {
-      console.log('[stt] finalize reason=provider_final', {
-        speaker,
-        text: trimmed,
-      });
+      if (SHOULD_LOG_STT_FINALIZATION) {
+        console.log('[stt] finalize reason=provider_final', {
+          speaker,
+          isFinal,
+          providerFinal,
+        });
+      }
       finalizeLiveSegment(speaker, trimmed);
       return;
     }
-
-    console.log('[stt] finalize reason=fallback_timer', {
-      speaker,
-      text: trimmed,
-      delayMs: getFinalizeDelayMs(),
-    });
     scheduleFinalizeTimer(speaker);
   }, [finalizeLiveSegment, scheduleFinalizeTimer, syncInterimSegments, syncTranscriptState]);
 
