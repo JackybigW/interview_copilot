@@ -107,6 +107,33 @@ test('does not ignore an incoming snapshot when it extends the current live text
   );
 });
 
+test('does not ignore a provider-final snapshot when it matches the current live text', () => {
+  assert.equal(
+    shouldIgnoreIncomingSnapshot({
+      speaker: 'interviewer',
+      incomingText: '你最大的缺点是什么？',
+      liveTextBySpeaker: {
+        user: '',
+        interviewer: '你最大的缺点是什么？',
+      },
+      lastFinalizedBySpeaker: {
+        user: {
+          text: '',
+          timestamp: 0,
+        },
+        interviewer: {
+          text: '',
+          timestamp: 0,
+        },
+      },
+      now: 30_000,
+      isFinal: true,
+      providerFinal: true,
+    }),
+    false,
+  );
+});
+
 test('canonicalizes punctuation so spoken duplicates do not reappear', () => {
   assert.equal(
     canonicalizeTranscriptText('你好，面试官等你的问题。'),

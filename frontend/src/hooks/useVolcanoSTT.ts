@@ -296,6 +296,8 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
         liveTextBySpeaker: liveRef.current,
         lastFinalizedBySpeaker: lastFinalizedRef.current,
         now,
+        isFinal,
+        providerFinal,
       })
     ) {
       return;

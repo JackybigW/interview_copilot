@@ -70,14 +70,21 @@ export function shouldIgnoreIncomingSnapshot({
   liveTextBySpeaker,
   lastFinalizedBySpeaker,
   now,
+  isFinal = false,
+  providerFinal = false,
   duplicateSuppressionMs = DUPLICATE_SEGMENT_SUPPRESSION_MS,
 }) {
   const normalizedIncoming = incomingText.trim();
   if (!normalizedIncoming) return true;
   const canonicalIncoming = canonicalizeTranscriptText(normalizedIncoming);
+  const shouldFinalizeImmediately = shouldFinalizeImmediatelyOnProviderFinal({
+    isFinal,
+    providerFinal,
+  });
 
   const currentLiveText = liveTextBySpeaker[speaker]?.trim() || '';
   if (
+    !shouldFinalizeImmediately &&
     currentLiveText &&
     canonicalizeTranscriptText(currentLiveText) === canonicalIncoming
   ) {
