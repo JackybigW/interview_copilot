@@ -12,8 +12,45 @@ export function getFinalizeDelayMs() {
   return LIVE_SEGMENT_FINALIZE_MS;
 }
 
+const MIN_REWRITE_OVERLAP_CHARS = 6;
+
+function getLongestCanonicalCommonSubstringLength(left, right) {
+  let maxLength = 0;
+  const dp = Array(right.length + 1).fill(0);
+
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    for (let rightIndex = right.length; rightIndex >= 1; rightIndex -= 1) {
+      if (left[leftIndex - 1] === right[rightIndex - 1]) {
+        dp[rightIndex] = dp[rightIndex - 1] + 1;
+        if (dp[rightIndex] > maxLength) {
+          maxLength = dp[rightIndex];
+        }
+      } else {
+        dp[rightIndex] = 0;
+      }
+    }
+  }
+
+  return maxLength;
+}
+
+function getCanonicalSuffixPrefixOverlapLength(left, right) {
+  const maxOverlap = Math.min(left.length, right.length);
+  for (let length = maxOverlap; length > 0; length -= 1) {
+    if (left.slice(-length) === right.slice(0, length)) {
+      return length;
+    }
+  }
+
+  return 0;
+}
+
 // Volcano snapshots are expected to be append-only once earlier speech has been
-// committed. We only strip a committed prefix when that invariant still holds.
+// committed. Once a segment is committed, later snapshots from the same speaker
+// must either continue appending or start a clearly new utterance. If a later
+// snapshot still overlaps heavily with committed text but no longer extends it
+// as a prefix, we treat it as a rewrite and ignore it to avoid re-injecting
+// already committed content back into the UI.
 export function stripCommittedPrefixFromSnapshot(text, committedText = '') {
   const normalizedSnapshot = text.trim();
   const normalizedCommitted = committedText.trim();
@@ -22,6 +59,7 @@ export function stripCommittedPrefixFromSnapshot(text, committedText = '') {
   if (!normalizedCommitted) return normalizedSnapshot;
 
   const canonicalCommitted = canonicalizeTranscriptText(normalizedCommitted);
+  const canonicalSnapshot = canonicalizeTranscriptText(normalizedSnapshot);
   if (!canonicalCommitted) return normalizedSnapshot;
 
   for (let index = 0; index <= normalizedSnapshot.length; index += 1) {
@@ -29,6 +67,18 @@ export function stripCommittedPrefixFromSnapshot(text, committedText = '') {
     if (canonicalizeTranscriptText(candidatePrefix) === canonicalCommitted) {
       return normalizedSnapshot.slice(index).trim();
     }
+  }
+
+  if (
+    canonicalCommitted.includes(canonicalSnapshot) ||
+    getLongestCanonicalCommonSubstringLength(
+      canonicalCommitted,
+      canonicalSnapshot,
+    ) >= MIN_REWRITE_OVERLAP_CHARS ||
+    getCanonicalSuffixPrefixOverlapLength(canonicalCommitted, canonicalSnapshot) >=
+      MIN_REWRITE_OVERLAP_CHARS
+  ) {
+    return '';
   }
 
   return normalizedSnapshot;

@@ -227,3 +227,23 @@ test('keeps the full snapshot when committed text no longer matches the prefix',
     'I work at Google',
   );
 });
+
+test('drops rewritten cumulative snapshots that would replay committed text', () => {
+  assert.equal(
+    stripCommittedPrefixFromSnapshot(
+      '没说你好，我在等你的问题。面试官你好，我在等你的问题。全线问题',
+      '面试官你好，我在等你的问题。全线问题。权限问题',
+    ),
+    '',
+  );
+});
+
+test('keeps a clearly new utterance even when earlier text was committed', () => {
+  assert.equal(
+    stripCommittedPrefixFromSnapshot(
+      '权限问题',
+      '面试官你好，我在等你的问题。全线问题',
+    ),
+    '权限问题',
+  );
+});
