@@ -545,8 +545,8 @@ async def websocket_stt_proxy(websocket: WebSocket):
                                         "provider_final": is_definite,
                                     })
                                     logger.info(
-                                        "stt_transcript_chunk text=%r provider_final=%s",
-                                        text,
+                                        "stt_transcript_chunk text_chars=%d provider_final=%s",
+                                        len(text),
                                         is_definite,
                                     )
                             nonlocal transcript_event_count, empty_result_count
@@ -556,10 +556,10 @@ async def websocket_stt_proxy(websocket: WebSocket):
 
                             if transcript_event_count_local > 0 or empty_result_count <= 8 or empty_result_count % 20 == 0:
                                 logger.info(
-                                    "stt_upstream_result events=%d empty_results=%d direct_text=%r provider_final=%s audio_duration=%s payload_keys=%s",
+                                    "stt_upstream_result events=%d empty_results=%d direct_text_chars=%d provider_final=%s audio_duration=%s payload_keys=%s",
                                     transcript_event_count_local,
                                     empty_result_count,
-                                    direct_text,
+                                    len(direct_text),
                                     provider_final_seen,
                                     audio_info.get("duration"),
                                     sorted(data.keys()) if isinstance(data, dict) else [],

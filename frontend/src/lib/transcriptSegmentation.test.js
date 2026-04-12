@@ -217,3 +217,13 @@ test('strips the committed prefix from cumulative snapshots', () => {
   );
   assert.equal(LIVE_SEGMENT_FINALIZE_MS, 300);
 });
+
+test('keeps the full snapshot when committed text no longer matches the prefix', () => {
+  assert.equal(
+    stripCommittedPrefixFromSnapshot(
+      'I work at Google',
+      'I worked at',
+    ),
+    'I work at Google',
+  );
+});

@@ -12,6 +12,8 @@ export function getFinalizeDelayMs() {
   return LIVE_SEGMENT_FINALIZE_MS;
 }
 
+// Volcano snapshots are expected to be append-only once earlier speech has been
+// committed. We only strip a committed prefix when that invariant still holds.
 export function stripCommittedPrefixFromSnapshot(text, committedText = '') {
   const normalizedSnapshot = text.trim();
   const normalizedCommitted = committedText.trim();
