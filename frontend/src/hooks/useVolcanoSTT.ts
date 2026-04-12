@@ -3,8 +3,10 @@ import { getAPIBaseURL } from '@/lib/config';
 import {
   DUPLICATE_SEGMENT_SUPPRESSION_MS,
   getSpeakersToFinalizeOnIncoming,
+  getFinalizeDelayMs,
   getStaleLiveSpeakers,
-  LIVE_SEGMENT_FINALIZE_MS,
+  shouldFinalizeImmediatelyOnProviderFinal,
+  stripCommittedPrefixFromSnapshot,
   shouldIgnoreIncomingSnapshot,
 } from '@/lib/transcriptSegmentation.js';
 
@@ -265,17 +267,25 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
         liveRef.current,
         liveTimestampRef.current,
         Date.now(),
-        LIVE_SEGMENT_FINALIZE_MS,
+        getFinalizeDelayMs(),
       );
 
       if (staleSpeakers.includes(speaker)) {
         finalizeLiveSegment(speaker);
       }
-    }, LIVE_SEGMENT_FINALIZE_MS);
+    }, getFinalizeDelayMs());
   }, [clearFinalizeTimer, finalizeLiveSegment]);
 
-  const handleTranscript = useCallback((speaker: Speaker, text: string, isFinal: boolean) => {
-    const trimmed = text.trim();
+  const handleTranscript = useCallback((
+    speaker: Speaker,
+    text: string,
+    isFinal: boolean,
+    providerFinal: boolean,
+  ) => {
+    const trimmed = stripCommittedPrefixFromSnapshot(
+      text,
+      committedRef.current[speaker],
+    );
     if (!trimmed) return;
 
     const now = Date.now();
@@ -302,13 +312,19 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
     liveRef.current[speaker] = trimmed;
     liveTimestampRef.current[speaker] = now;
     syncInterimSegments();
-
-    // Volcano emits cumulative snapshots; finalize on inactivity or speaker change,
-    // not on provider-level "definite" flags.
-    void isFinal;
-    scheduleFinalizeTimer(speaker);
-
     syncTranscriptState();
+
+    if (
+      shouldFinalizeImmediatelyOnProviderFinal({
+        isFinal,
+        providerFinal,
+      })
+    ) {
+      finalizeLiveSegment(speaker, trimmed);
+      return;
+    }
+
+    scheduleFinalizeTimer(speaker);
   }, [finalizeLiveSegment, scheduleFinalizeTimer, syncInterimSegments, syncTranscriptState]);
 
   const startAudioProcessing = useCallback(async (speaker: Speaker, audioCtx: AudioContext, stream: MediaStream) => {
@@ -363,7 +379,12 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
         }
 
         if (data.type === 'transcript') {
-          handleTranscript(speaker, data.text || '', data.is_final || false);
+          handleTranscript(
+            speaker,
+            data.text || '',
+            data.is_final || false,
+            data.provider_final || false,
+          );
           return;
         }
 

@@ -8,6 +8,7 @@ import {
   getFinalizeDelayMs,
   getStaleLiveSpeakers,
   LIVE_SEGMENT_FINALIZE_MS,
+  stripCommittedPrefixFromSnapshot,
   shouldFinalizeImmediatelyOnProviderFinal,
   shouldIgnoreIncomingSnapshot,
 } from './transcriptSegmentation.js';
@@ -143,16 +144,15 @@ test('provider final is required when the local chunk is not final', () => {
   );
 });
 
-test('non-provider-final chunks still use fallback timeout', () => {
+test('provider final beats local inactivity fallback', () => {
   assert.equal(
     shouldFinalizeImmediatelyOnProviderFinal({
-      isFinal: false,
-      providerFinal: false,
+      isFinal: true,
+      providerFinal: true,
     }),
-    false,
+    true,
   );
   assert.equal(getFinalizeDelayMs(), 300);
-  assert.equal(LIVE_SEGMENT_FINALIZE_MS, 300);
 });
 
 test('ignores a repeated finalized utterance even after the short suppression window', () => {
@@ -178,4 +178,15 @@ test('ignores a repeated finalized utterance even after the short suppression wi
     }),
     true,
   );
+});
+
+test('strips the committed prefix from cumulative snapshots', () => {
+  assert.equal(
+    stripCommittedPrefixFromSnapshot(
+      '你好 面试官等你的问题 我最大的优点是执行力强',
+      '你好，面试官等你的问题。',
+    ),
+    '我最大的优点是执行力强',
+  );
+  assert.equal(LIVE_SEGMENT_FINALIZE_MS, 300);
 });

@@ -12,6 +12,26 @@ export function getFinalizeDelayMs() {
   return LIVE_SEGMENT_FINALIZE_MS;
 }
 
+export function stripCommittedPrefixFromSnapshot(text, committedText = '') {
+  const normalizedSnapshot = text.trim();
+  const normalizedCommitted = committedText.trim();
+
+  if (!normalizedSnapshot) return '';
+  if (!normalizedCommitted) return normalizedSnapshot;
+
+  const canonicalCommitted = canonicalizeTranscriptText(normalizedCommitted);
+  if (!canonicalCommitted) return normalizedSnapshot;
+
+  for (let index = 0; index <= normalizedSnapshot.length; index += 1) {
+    const candidatePrefix = normalizedSnapshot.slice(0, index);
+    if (canonicalizeTranscriptText(candidatePrefix) === canonicalCommitted) {
+      return normalizedSnapshot.slice(index).trim();
+    }
+  }
+
+  return normalizedSnapshot;
+}
+
 export function canonicalizeTranscriptText(text) {
   return text
     .trim()
