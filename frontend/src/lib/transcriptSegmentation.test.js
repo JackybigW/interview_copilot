@@ -123,6 +123,26 @@ test('provider final chunks finalize immediately', () => {
   );
 });
 
+test('provider final is required when the local chunk is final', () => {
+  assert.equal(
+    shouldFinalizeImmediatelyOnProviderFinal({
+      isFinal: true,
+      providerFinal: false,
+    }),
+    false,
+  );
+});
+
+test('provider final is required when the local chunk is not final', () => {
+  assert.equal(
+    shouldFinalizeImmediatelyOnProviderFinal({
+      isFinal: false,
+      providerFinal: true,
+    }),
+    false,
+  );
+});
+
 test('non-provider-final chunks still use fallback timeout', () => {
   assert.equal(
     shouldFinalizeImmediatelyOnProviderFinal({
