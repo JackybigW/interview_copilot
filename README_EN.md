@@ -3,7 +3,7 @@
 ## Demo
 
 - Watch the demo: [Loom walkthrough](https://www.loom.com/share/29f9187f63cf409abcd9816aa23eaefc)
-- Download the local video file: [demo/interview-copilot-demo.mp4](./demo/interview-copilot-demo.mp4) `3.2MB`
+- Download the local video file: [demo/interview-copilot-demo.mp4](./demo/interview-copilot-demo.mp4) `10MB`
 
 A real-time interview copilot.
 
