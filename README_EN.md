@@ -4,6 +4,10 @@
 
 - Product walkthrough video: [demo/interview-copilot-demo.mp4](./demo/interview-copilot-demo.mp4)
 
+A real-time interview copilot.
+
+The point is not "answering questions with an LLM."  
+The point is wiring candidate grounding, dual-channel speech, question detection, and low-latency answer prefill into one working system.
 
 ## Workflow
 
@@ -76,66 +80,64 @@ flowchart TB
 
 ### 1. Resume + JD grounding
 
-候选人可以上传 `Resume` 和 `JD`。
+The candidate can upload a `Resume` and a `JD`.
 
-系统会：
+The system then:
 
-- 解析原始文本 / 文件
-- 用 LLM 做结构化抽取
-- 生成一段压缩后的候选人 summary 和 role summary
-- 把这段 summary 塞进后续回答链路的 system prompt
+- parses raw text / files
+- runs LLM-based structured extraction
+- produces a compressed candidate summary and role summary
+- injects that summary into the downstream system prompt
 
-这一步的目的很直接：
-
-不要让 live answer generation 每一轮都重新“猜”候选人是谁、岗位要什么。
+This matters because live answer generation should not have to re-derive who the candidate is and what the role needs on every turn.
 
 ## 2. Live transcript
 
-系统同时接两路音频：
+The system listens to two audio streams at the same time:
 
-- 候选人麦克风
-- 面试官系统音频 / tab 音频
+- candidate microphone
+- interviewer system audio / tab audio
 
-然后做：
+Then it does:
 
-- 实时转写
+- real-time transcription
 - speaker separation
-- transcript streaming
+- streaming transcript updates
 
-也就是，系统不是只有一段 transcript，而是能持续区分：
+That means the app is not dealing with one generic transcript blob. It continuously maintains:
 
 - `candidate`
 - `interviewer`
 
-这对后面的 trigger 很关键。
+That boundary is what makes the downstream trigger usable.
 
 ## 3. Question detection + prefill
 
-右侧 copilot 不需要等整场 transcript 结束。
+The right-side copilot does not wait for the whole transcript to settle.
 
-当前链路是：
+The current path is:
 
-- 左侧 transcript 一边流式更新
-- 一边检测 interviewer 当前轮次是否已经形成问题
-- 一旦识别到问题信号，就立刻开始生成 answer prefill
+- the left panel keeps updating live transcript
+- the system watches the current interviewer turn for question signals
+- once a question is detected, it immediately starts generating an answer prefill
 
-核心目标只有一个：
+The goal is simple:
 
-**抢时间。**
+**win back time.**
 
-不是“完美理解一切再回答”，而是尽可能在 interviewer 说完的同时，把候选人可用的答案提前铺出来，压低感知延迟。
+Not "understand everything perfectly before responding," but get a usable answer in front of the candidate as early as possible.
 
 ## Current Product Shape
 
-这个 demo 目前已经打通了三件真正难的事：
+This demo already connects three hard pieces:
 
 - candidate / role grounding
 - dual-channel real-time transcript
 - low-latency answer prefill
 
-所以它不是一个静态 prompt app。
+So this is not a static prompt app.
 
-它更接近一个实时 AI system。
+It is much closer to a real-time AI system.
 
 ## Tech Stack
 
@@ -160,46 +162,46 @@ flowchart TB
 
 ## Latency Breakdown
 
-当前右侧 latency 主要由这几部分组成：
+Right-panel latency is mostly made of:
 
-1. interviewer 的问题被 STT 识别出来
-2. 前端做一个很短的 trigger debounce
-3. 前端发请求到后端
-4. 后端调用 Gemini Flash
-5. Gemini 返回首 token
-6. 前端流式渲染答案
+1. the interviewer question becoming visible to STT
+2. a very short frontend trigger debounce
+3. frontend -> backend request time
+4. backend -> Gemini Flash call
+5. time-to-first-token from the model
+6. streamed completion rendering
 
-真正的大头通常不是前端渲染。
+In practice, the big buckets are not frontend paint time.
 
-真正的大头是：
+The big buckets are:
 
-- STT 什么时候把问题暴露得足够清楚
-- LLM 的 time-to-first-token
+- when STT exposes the question clearly enough
+- LLM TTFC
 
 ## What Still Needs Work
 
-这版 demo 是能用的，但还远远没到终局。
+This demo is usable, but not done.
 
-下一步最值得继续做的方向：
+The next obvious improvements are:
 
 ### Lower latency
 
-- 更小的 prompt
-- 更少的 transcript context
-- prefill / refine 两阶段回答
-- 更 aggressive 的 VAD / finalization 策略
+- smaller prompts
+- less transcript context
+- prefill / refine two-stage generation
+- more aggressive VAD / finalization policy
 
 ### Better trigger quality
 
-- 不只看问号
-- 更强的 interviewer turn parsing
-- 区分寒暄、确认句、真实面试问题
+- not just punctuation
+- better interviewer-turn parsing
+- separate greetings, confirmation phrases, and real interview questions
 
 ### Better answer quality
 
-- behavioral / technical / product / system design 分流
-- 更强的 candidate-specific grounding
-- 更短、更像真人现场会说的话
+- route behavioral / technical / product / system design questions differently
+- stronger candidate-specific grounding
+- shorter answers that sound closer to real spoken delivery
 
 ## Local Run
 
@@ -231,15 +233,15 @@ DATABASE_URL=sqlite+aiosqlite:///./interview_copilot.db
 
 ## Bottom Line
 
-这不是“面试问答 prompt”。
+This is not "an interview prompt."
 
-这是一个把：
+It is a working demo that combines:
 
-- structured candidate context
+- structured candidate grounding
 - dual-speaker live transcript
 - question detection
 - low-latency answer prefill
 
-拼成一条实时工作流的 demo。
+into a single real-time workflow.
 
-这才是这个项目的核心。
+That is the actual point of the project.
