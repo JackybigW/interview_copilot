@@ -6,13 +6,8 @@ import TranscriptionPanel from '@/components/TranscriptionPanel';
 import AIResponsePanel from '@/components/AIResponsePanel';
 import { Button } from '@/components/ui/button';
 import { client } from '@/lib/api';
-import {
-  buildFinalizedInterviewerQuestion,
-  buildPrefillCandidate,
-  buildTranscriptContext,
-  isStablePrefillCandidate,
-  normalizeQuestionText,
-} from '@/lib/copilotQuestioning.js';
+
+const COPILOT_TRANSCRIPT_DEBOUNCE_MS = 80;
 
 export default function Interview() {
   const { id } = useParams<{ id: string }>();
@@ -28,6 +23,7 @@ export default function Interview() {
 
   const {
     isListening,
+    interviewerTranscript,
     interimSegments,
     segments,
     startListening,
@@ -43,18 +39,14 @@ export default function Interview() {
     currentQuestion,
     currentAnswer,
     isProcessing,
-    processingPhase,
     setContext,
-    startPrefill,
-    finalizeQuestion,
-    cancelPrefill,
+    processTranscript,
     clearQuestions,
   } = useInterviewAI();
 
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const lastProcessedSegmentIdRef = useRef(-1);
-  const prefillCandidateRef = useRef({ question: '', seenCount: 0 });
+  const textDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Set AI context from state
   useEffect(() => {
@@ -78,74 +70,35 @@ export default function Interview() {
     };
   }, [isListening]);
 
-  // Start low-latency prefill once the same interviewer live question is seen twice.
-  useEffect(() => {
-    if (!isListening) {
-      prefillCandidateRef.current = { question: '', seenCount: 0 };
-      return;
-    }
-
-    const latestInterim = [...interimSegments]
-      .reverse()
-      .find((segment) => segment.speaker === 'interviewer');
-    const nextCandidate = buildPrefillCandidate(latestInterim?.text || '');
-
-    if (!nextCandidate) {
-      prefillCandidateRef.current = { question: '', seenCount: 0 };
-      return;
-    }
-
-    const previousQuestion = prefillCandidateRef.current.question;
-    const seenCount =
-      previousQuestion &&
-      normalizeQuestionText(previousQuestion) === normalizeQuestionText(nextCandidate)
-        ? prefillCandidateRef.current.seenCount
-        : 0;
-
-    if (
-      isStablePrefillCandidate({
-        previousCandidate: previousQuestion,
-        nextCandidate,
-        seenCount,
-      })
-    ) {
-      startPrefill(
-        nextCandidate,
-        buildTranscriptContext({
-          segments,
-          liveInterviewerText: latestInterim?.text || '',
-        }),
-      );
-    }
-
-    prefillCandidateRef.current = {
-      question: nextCandidate,
-      seenCount: seenCount + 1,
-    };
-  }, [interimSegments, isListening, segments, startPrefill]);
-
+  // Stream interviewer transcript into Gemini Flash, which decides whether the
+  // latest interviewer speech is a real question or just conversational filler.
   useEffect(() => {
     if (!isListening) return;
+    if (!interviewerTranscript.trim()) return;
+    if (!/[?？]/.test(interviewerTranscript)) return;
 
-    const latestSegment = segments[segments.length - 1];
-    if (!latestSegment || latestSegment.speaker !== 'interviewer') return;
-    if (latestSegment.id <= lastProcessedSegmentIdRef.current) {
-      return;
+    if (textDebounceRef.current) {
+      clearTimeout(textDebounceRef.current);
     }
 
-    const finalizedQuestion = buildFinalizedInterviewerQuestion(
-      segments.slice(Math.max(0, segments.length - 8)),
-    );
-    if (!finalizedQuestion) return;
+    textDebounceRef.current = setTimeout(() => {
+      if (!isProcessing) {
+        const recentSegments = segments
+          .slice(-7)
+          .map((segment) => `[${segment.speaker}] ${segment.text}`)
+          .concat([`[interviewer] ${interviewerTranscript.trim()}`])
+          .join('\n');
 
-    lastProcessedSegmentIdRef.current = latestSegment.id;
-    finalizeQuestion(
-      finalizedQuestion,
-      buildTranscriptContext({
-        segments: segments.slice(Math.max(0, segments.length - 8)),
-      }),
-    );
-  }, [finalizeQuestion, isListening, segments]);
+        processTranscript(recentSegments);
+      }
+    }, COPILOT_TRANSCRIPT_DEBOUNCE_MS);
+
+    return () => {
+      if (textDebounceRef.current) {
+        clearTimeout(textDebounceRef.current);
+      }
+    };
+  }, [interviewerTranscript, segments, isListening, processTranscript, isProcessing]);
 
   const handleStart = useCallback(() => {
     setElapsed(0);
@@ -162,7 +115,6 @@ export default function Interview() {
   }, [startListening, state.language, id]);
 
   const handleStop = useCallback(() => {
-    cancelPrefill();
     stopListening();
 
     // Save session data
@@ -190,17 +142,14 @@ export default function Interview() {
         },
       }).catch(console.error);
     }
-  }, [cancelPrefill, stopListening, id, elapsed, segments, questions]);
+  }, [stopListening, id, elapsed, segments, questions]);
 
   const handleReset = useCallback(() => {
     stopListening();
     resetTranscript();
     clearQuestions();
-    cancelPrefill();
     setElapsed(0);
-    lastProcessedSegmentIdRef.current = -1;
-    prefillCandidateRef.current = { question: '', seenCount: 0 };
-  }, [stopListening, resetTranscript, clearQuestions, cancelPrefill]);
+  }, [stopListening, resetTranscript, clearQuestions]);
 
   const formatTime = (seconds: number) => {
     const h = Math.floor(seconds / 3600);
@@ -290,7 +239,6 @@ export default function Interview() {
             currentQuestion={currentQuestion}
             currentAnswer={currentAnswer}
             isProcessing={isProcessing}
-            processingPhase={processingPhase}
           />
         </div>
       </div>

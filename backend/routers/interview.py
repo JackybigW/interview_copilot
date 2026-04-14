@@ -25,7 +25,12 @@ from services.gemini_structured_service import (
     build_concise_context,
     refine_structured_profile,
 )
-from services.gemini_flash_service import generate_answer_stream, GEMINI_FLASH_MODEL
+from services.gemini_flash_service import (
+    generate_answer_stream,
+    detect_question_and_answer_stream,
+    extract_question_from_detected_content,
+    GEMINI_FLASH_MODEL,
+)
 from services.file_parser_service import parse_file
 
 import websockets
@@ -65,6 +70,32 @@ class GenerateAnswerRequest(BaseModel):
     language: str = "en"
     request_phase: str = "final"
     request_generation: int = 0
+
+
+@router.post("/detect-question")
+async def detect_question(request: GenerateAnswerRequest):
+    """Detect a complete interviewer question from recent transcript context."""
+    try:
+        context_parts = []
+        if request.resume_context:
+            context_parts.append(request.resume_context)
+        if request.jd_context:
+            context_parts.append(request.jd_context)
+        context = "\n\n".join(context_parts)
+
+        chunks: list[str] = []
+        async for chunk in detect_question_and_answer_stream(
+            transcript=request.transcript_context,
+            context=context,
+            language=request.language,
+        ):
+            chunks.append(chunk)
+
+        detected_question = extract_question_from_detected_content("".join(chunks))
+        return {"question": detected_question}
+    except Exception as e:
+        logger.error(f"Question detection error: {e}")
+        raise HTTPException(status_code=500, detail=f"Question detection failed: {str(e)}")
 
 
 class RefineAnalysisRequest(BaseModel):
@@ -257,8 +288,10 @@ async def generate_answer(request: GenerateAnswerRequest):
         question_chars = len(request.question)
         context_chars = len(context)
         transcript_chars = len(request.transcript_context)
+        request_type = "generate_answer" if request.question.strip() else "detect_question_and_answer"
         logger.info(
-            "copilot_answer request_type=generate_answer model=%s request_phase=%s request_generation=%d question_chars=%d context_chars=%d transcript_chars=%d language=%s",
+            "copilot_answer request_type=%s model=%s request_phase=%s request_generation=%d question_chars=%d context_chars=%d transcript_chars=%d language=%s",
+            request_type,
             GEMINI_FLASH_MODEL,
             request.request_phase,
             request.request_generation,
@@ -273,16 +306,26 @@ async def generate_answer(request: GenerateAnswerRequest):
             first_chunk_ms: float | None = None
             chunk_count = 0
             try:
-                async for chunk in generate_answer_stream(
-                    question=request.question,
-                    context=context,
-                    transcript_context=request.transcript_context,
-                    language=request.language,
-                ):
+                if request.question.strip():
+                    stream = generate_answer_stream(
+                        question=request.question,
+                        context=context,
+                        transcript_context=request.transcript_context,
+                        language=request.language,
+                    )
+                else:
+                    stream = detect_question_and_answer_stream(
+                        transcript=request.transcript_context,
+                        context=context,
+                        language=request.language,
+                    )
+
+                async for chunk in stream:
                     if first_chunk_ms is None:
                         first_chunk_ms = (time.perf_counter() - start) * 1000
                         logger.info(
-                            "copilot_answer first_chunk model=%s request_phase=%s request_generation=%d ttfc_ms=%.1f question_chars=%d context_chars=%d transcript_chars=%d",
+                            "copilot_answer first_chunk request_type=%s model=%s request_phase=%s request_generation=%d ttfc_ms=%.1f question_chars=%d context_chars=%d transcript_chars=%d",
+                            request_type,
                             GEMINI_FLASH_MODEL,
                             request.request_phase,
                             request.request_generation,
@@ -305,7 +348,8 @@ async def generate_answer(request: GenerateAnswerRequest):
             finally:
                 total_ms = (time.perf_counter() - start) * 1000
                 logger.info(
-                    "copilot_answer complete model=%s request_phase=%s request_generation=%d total_ms=%.1f ttfc_ms=%s chunks=%d question_chars=%d context_chars=%d transcript_chars=%d",
+                    "copilot_answer complete request_type=%s model=%s request_phase=%s request_generation=%d total_ms=%.1f ttfc_ms=%s chunks=%d question_chars=%d context_chars=%d transcript_chars=%d",
+                    request_type,
                     GEMINI_FLASH_MODEL,
                     request.request_phase,
                     request.request_generation,
@@ -535,6 +579,7 @@ async def websocket_stt_proxy(websocket: WebSocket):
                         result = parse_server_response(msg)
                         if result["type"] == "result":
                             transcript_event_count_local = 0
+                            provider_final_seen = False
                             data = result.get("data", {})
                             direct_result = data.get("result", {})
                             direct_text = direct_result.get("text", "") if isinstance(direct_result, dict) else ""
@@ -542,13 +587,20 @@ async def websocket_stt_proxy(websocket: WebSocket):
                             for item in _iter_transcript_chunks(result):
                                 text = item.get("text", "")
                                 is_definite = item.get("definite", False)
+                                provider_final_seen = provider_final_seen or is_definite
                                 if text:
                                     transcript_event_count_local += 1
                                     await websocket.send_json({
                                         "type": "transcript",
                                         "text": text,
                                         "is_final": is_definite,
+                                        "provider_final": is_definite,
                                     })
+                                    logger.info(
+                                        "stt_transcript_chunk text_chars=%d provider_final=%s",
+                                        len(text),
+                                        is_definite,
+                                    )
                             nonlocal transcript_event_count, empty_result_count
                             transcript_event_count += transcript_event_count_local
                             if transcript_event_count_local == 0:
@@ -556,10 +608,11 @@ async def websocket_stt_proxy(websocket: WebSocket):
 
                             if transcript_event_count_local > 0 or empty_result_count <= 8 or empty_result_count % 20 == 0:
                                 logger.info(
-                                    "stt_upstream_result events=%d empty_results=%d direct_text=%r audio_duration=%s payload_keys=%s",
+                                    "stt_upstream_result events=%d empty_results=%d direct_text_chars=%d provider_final=%s audio_duration=%s payload_keys=%s",
                                     transcript_event_count_local,
                                     empty_result_count,
-                                    direct_text,
+                                    len(direct_text),
+                                    provider_final_seen,
                                     audio_info.get("duration"),
                                     sorted(data.keys()) if isinstance(data, dict) else [],
                                 )

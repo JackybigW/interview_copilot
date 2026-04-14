@@ -2,9 +2,9 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { getAPIBaseURL } from '@/lib/config';
 import {
   DUPLICATE_SEGMENT_SUPPRESSION_MS,
-  getSpeakersToFinalizeOnIncoming,
-  getStaleLiveSpeakers,
-  LIVE_SEGMENT_FINALIZE_MS,
+  getSpeakersToFinalizeOnStableIncoming,
+  shouldFinalizeLiveTextOnSpeakerSwitch,
+  shouldFinalizeImmediatelyOnProviderFinal,
   stripCommittedPrefixFromSnapshot,
   shouldIgnoreIncomingSnapshot,
 } from '@/lib/transcriptSegmentation.js';
@@ -55,6 +55,8 @@ const EMPTY_SESSION: SessionState = {
   source: null,
   gain: null,
 };
+
+const SHOULD_LOG_STT_FINALIZATION = import.meta.env.DEV;
 
 /**
  * Hook for dual-stream Volcano STT:
@@ -259,23 +261,12 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
     syncInterimSegments();
   }, [clearFinalizeTimer, syncInterimSegments, syncTranscriptState]);
 
-  const scheduleFinalizeTimer = useCallback((speaker: Speaker) => {
-    clearFinalizeTimer(speaker);
-    finalizeTimersRef.current[speaker] = window.setTimeout(() => {
-      const staleSpeakers = getStaleLiveSpeakers(
-        liveRef.current,
-        liveTimestampRef.current,
-        Date.now(),
-        LIVE_SEGMENT_FINALIZE_MS,
-      );
-
-      if (staleSpeakers.includes(speaker)) {
-        finalizeLiveSegment(speaker);
-      }
-    }, LIVE_SEGMENT_FINALIZE_MS);
-  }, [clearFinalizeTimer, finalizeLiveSegment]);
-
-  const handleTranscript = useCallback((speaker: Speaker, text: string, isFinal: boolean) => {
+  const handleTranscript = useCallback((
+    speaker: Speaker,
+    text: string,
+    isFinal: boolean,
+    providerFinal: boolean,
+  ) => {
     const trimmed = stripCommittedPrefixFromSnapshot(
       text,
       committedRef.current[speaker],
@@ -290,30 +281,67 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
         liveTextBySpeaker: liveRef.current,
         lastFinalizedBySpeaker: lastFinalizedRef.current,
         now,
+        isFinal,
+        providerFinal,
       })
     ) {
       return;
     }
 
-    const speakersToFinalize = getSpeakersToFinalizeOnIncoming(
-      liveRef.current,
-      speaker,
-    );
+    const speakersToFinalize = getSpeakersToFinalizeOnStableIncoming({
+      liveTextBySpeaker: liveRef.current,
+      incomingSpeaker: speaker,
+      incomingText: trimmed,
+      isFinal,
+      providerFinal,
+    });
+
     speakersToFinalize.forEach((speakerToFinalize) => {
+      if (
+        !shouldFinalizeLiveTextOnSpeakerSwitch({
+          speaker: speakerToFinalize,
+          liveText: liveRef.current[speakerToFinalize],
+        })
+      ) {
+        return;
+      }
+
+      if (SHOULD_LOG_STT_FINALIZATION) {
+        console.log('[stt] finalize reason=speaker_switch_stable', {
+          speaker: speakerToFinalize,
+          incomingSpeaker: speaker,
+          providerFinal,
+        });
+      }
       finalizeLiveSegment(speakerToFinalize);
     });
 
     liveRef.current[speaker] = trimmed;
     liveTimestampRef.current[speaker] = now;
     syncInterimSegments();
-
-    // Volcano emits cumulative snapshots; finalize on inactivity or speaker change,
-    // not on provider-level "definite" flags.
-    void isFinal;
-    scheduleFinalizeTimer(speaker);
-
     syncTranscriptState();
-  }, [finalizeLiveSegment, scheduleFinalizeTimer, syncInterimSegments, syncTranscriptState]);
+
+    if (
+      shouldFinalizeImmediatelyOnProviderFinal({
+        isFinal,
+        providerFinal,
+      })
+    ) {
+      if (SHOULD_LOG_STT_FINALIZATION) {
+        console.log('[stt] finalize reason=provider_final', {
+          speaker,
+          isFinal,
+          providerFinal,
+        });
+      }
+      finalizeLiveSegment(speaker, trimmed);
+      return;
+    }
+
+    // Experiment: disable local inactivity fallback and rely only on Volcano
+    // provider finalization while we evaluate pure provider VAD behavior.
+    clearFinalizeTimer(speaker);
+  }, [clearFinalizeTimer, finalizeLiveSegment, syncInterimSegments, syncTranscriptState]);
 
   const startAudioProcessing = useCallback(async (speaker: Speaker, audioCtx: AudioContext, stream: MediaStream) => {
     if (audioCtx.state === 'suspended') {
@@ -367,7 +395,12 @@ export function useVolcanoSTT(): UseVolcanoSTTReturn {
         }
 
         if (data.type === 'transcript') {
-          handleTranscript(speaker, data.text || '', data.is_final || false);
+          handleTranscript(
+            speaker,
+            data.text || '',
+            data.is_final || false,
+            data.provider_final || false,
+          );
           return;
         }
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import type {
   InterimTranscriptSegment,
   TranscriptSegment,
@@ -158,8 +158,6 @@ export default function TranscriptionPanel({
   isListening,
 }: TranscriptionPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [displayedInterim, setDisplayedInterim] =
-    useState<InterimTranscriptSegment | null>(null);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -167,34 +165,10 @@ export default function TranscriptionPanel({
     }
   }, [segments, interimSegments]);
 
-  useEffect(() => {
-    if (interimSegments.length === 0) {
-      setDisplayedInterim(null);
-      return;
-    }
-
-    const latestSegment = interimSegments[interimSegments.length - 1];
-
-    setDisplayedInterim((current) => {
-      if (!current) return latestSegment;
-
-      const sameSpeakerUpdate = interimSegments.find(
-        (segment) => segment.speaker === current.speaker,
-      );
-      if (sameSpeakerUpdate) {
-        return sameSpeakerUpdate;
-      }
-
-      const currentAge = latestSegment.timestamp - current.timestamp;
-      if (currentAge > 1200) {
-        return latestSegment;
-      }
-
-      return current;
-    });
-  }, [interimSegments]);
-
   const showDemo = segments.length === 0 && !isListening;
+  const displayedInterims = [...interimSegments].sort(
+    (left, right) => left.timestamp - right.timestamp,
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -300,14 +274,16 @@ export default function TranscriptionPanel({
                   speaker={segment.speaker}
                 />
               ))}
-              {displayedInterim ? (
-                <TranscriptRow
-                  key={`interim-${displayedInterim.speaker}`}
-                  timestamp={displayedInterim.timestamp}
-                  text={displayedInterim.text}
-                  speaker={displayedInterim.speaker}
-                  interim
-                />
+              {displayedInterims.length > 0 ? (
+                displayedInterims.map((segment) => (
+                  <TranscriptRow
+                    key={`interim-${segment.speaker}`}
+                    timestamp={segment.timestamp}
+                    text={segment.text}
+                    speaker={segment.speaker}
+                    interim
+                  />
+                ))
               ) : isListening ? (
                 <div className="grid grid-cols-[80px_20px_minmax(0,1fr)] gap-3 pt-1">
                   <div className="pt-0.5 text-[11px] font-mono tabular-nums text-white/18">
@@ -353,15 +329,15 @@ export default function TranscriptionPanel({
 
           {isListening && segments.length === 0 && interimSegments.length > 0 && (
             <div className="rounded-[24px] border border-white/[0.05] bg-white/[0.02] px-5 py-5">
-              {displayedInterim ? (
+              {displayedInterims.map((segment) => (
                 <TranscriptRow
-                  key={`empty-interim-${displayedInterim.speaker}`}
-                  timestamp={displayedInterim.timestamp}
-                  text={displayedInterim.text}
-                  speaker={displayedInterim.speaker}
+                  key={`empty-interim-${segment.speaker}`}
+                  timestamp={segment.timestamp}
+                  text={segment.text}
+                  speaker={segment.speaker}
                   interim
                 />
-              ) : null}
+              ))}
             </div>
           )}
         </div>
