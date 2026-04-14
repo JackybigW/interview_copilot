@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from 'react';
 import { getAPIBaseURL } from '@/lib/config';
 import {
+  extractLatestInterviewerTurn,
   extractLatestInterviewerQuestion,
   getStreamingAnswerText,
 } from '@/lib/copilotQuestioning.js';
@@ -39,8 +40,8 @@ export function useInterviewAI(): UseInterviewAIReturn {
   const [isProcessing, setIsProcessing] = useState(false);
 
   const questionIdRef = useRef(0);
-  const lastProcessedRef = useRef('');
-  const processingLockRef = useRef(false);
+  const lastProcessedQuestionRef = useRef('');
+  const isProcessingRef = useRef(false);
   const contextRef = useRef({
     resumeContext: '',
     jdContext: '',
@@ -61,33 +62,29 @@ export function useInterviewAI(): UseInterviewAIReturn {
   const processTranscript = useCallback(
     (fullTranscript: string) => {
       if (!fullTranscript.trim()) return;
-      if (processingLockRef.current) return;
+      if (isProcessingRef.current) return;
       if (fullTranscript.trim().length < 10) return;
-
+      const latestInterviewerTurn = extractLatestInterviewerTurn(fullTranscript);
+      if (!latestInterviewerTurn) return;
       const latestQuestion = extractLatestInterviewerQuestion(fullTranscript);
       if (!latestQuestion) return;
-      if (latestQuestion === lastProcessedRef.current) return;
+      if (latestQuestion === lastProcessedQuestionRef.current) return;
 
-      lastProcessedRef.current = latestQuestion;
-      processingLockRef.current = true;
+      const recentContext = fullTranscript.slice(-2000);
+      const { resumeContext, jdContext, language } = contextRef.current;
+      const baseUrl = getAPIBaseURL();
+      isProcessingRef.current = true;
       setIsProcessing(true);
       setCurrentQuestion(latestQuestion);
       setCurrentAnswer('');
 
-      const recentContext = fullTranscript.slice(-2000);
-      const { resumeContext, jdContext, language } = contextRef.current;
-
-      // Use the backend generate-answer endpoint with Gemini Flash streaming
-      const baseUrl = getAPIBaseURL();
-
       (async () => {
-        let streamedContent = '';
         try {
           const response = await fetch(`${baseUrl}/api/v1/interview/generate-answer`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              question: latestQuestion,
+              question: latestInterviewerTurn,
               resume_context: resumeContext,
               jd_context: jdContext,
               transcript_context: recentContext,
@@ -103,30 +100,30 @@ export function useInterviewAI(): UseInterviewAIReturn {
           if (!reader) throw new Error('No reader');
 
           const decoder = new TextDecoder();
+          let streamedContent = '';
 
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
 
             const text = decoder.decode(value, { stream: true });
-            // Parse SSE data lines
             const lines = text.split('\n');
             for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                const data = line.slice(6);
-                if (data === '[DONE]') continue;
-                if (data.startsWith('[ERROR]')) {
-                  console.error('Stream error:', data);
-                  continue;
-                }
-                streamedContent += data;
-                setCurrentAnswer(getStreamingAnswerText(streamedContent));
+              if (!line.startsWith('data: ')) continue;
+              const data = line.slice(6);
+              if (data === '[DONE]') continue;
+              if (data.startsWith('[ERROR]')) {
+                console.error('Stream error:', data);
+                continue;
               }
+              streamedContent += data;
+              setCurrentAnswer(getStreamingAnswerText(streamedContent));
             }
           }
 
           const finalAnswer = getStreamingAnswerText(streamedContent);
           if (finalAnswer) {
+            lastProcessedQuestionRef.current = latestQuestion;
             const newQuestion: DetectedQuestion = {
               id: questionIdRef.current++,
               question: latestQuestion,
@@ -139,7 +136,7 @@ export function useInterviewAI(): UseInterviewAIReturn {
         } catch (err) {
           console.error('AI processing error:', err);
         } finally {
-          processingLockRef.current = false;
+          isProcessingRef.current = false;
           setIsProcessing(false);
           setCurrentQuestion('');
           setCurrentAnswer('');
@@ -154,7 +151,8 @@ export function useInterviewAI(): UseInterviewAIReturn {
     setCurrentQuestion('');
     setCurrentAnswer('');
     questionIdRef.current = 0;
-    lastProcessedRef.current = '';
+    lastProcessedQuestionRef.current = '';
+    isProcessingRef.current = false;
   }, []);
 
   return {

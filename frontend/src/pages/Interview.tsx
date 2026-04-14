@@ -7,6 +7,8 @@ import AIResponsePanel from '@/components/AIResponsePanel';
 import { Button } from '@/components/ui/button';
 import { client } from '@/lib/api';
 
+const COPILOT_TRANSCRIPT_DEBOUNCE_MS = 80;
+
 export default function Interview() {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
@@ -44,7 +46,6 @@ export default function Interview() {
 
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const lastProcessedSegmentIdRef = useRef(-1);
   const textDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Set AI context from state
@@ -69,17 +70,12 @@ export default function Interview() {
     };
   }, [isListening]);
 
-  // Text-based question detection with debounce
+  // Stream interviewer transcript into Gemini Flash, which decides whether the
+  // latest interviewer speech is a real question or just conversational filler.
   useEffect(() => {
     if (!isListening) return;
-
-    const lastInterviewerSegment = [...segments]
-      .reverse()
-      .find((segment) => segment.speaker === 'interviewer');
-    if (!lastInterviewerSegment) return;
-    if (lastInterviewerSegment.id <= lastProcessedSegmentIdRef.current) {
-      return;
-    }
+    if (!interviewerTranscript.trim()) return;
+    if (!/[?？]/.test(interviewerTranscript)) return;
 
     if (textDebounceRef.current) {
       clearTimeout(textDebounceRef.current);
@@ -87,25 +83,22 @@ export default function Interview() {
 
     textDebounceRef.current = setTimeout(() => {
       if (!isProcessing) {
-        lastProcessedSegmentIdRef.current = lastInterviewerSegment.id;
-        const lastInterviewerIndex = segments.findIndex(
-          (segment) => segment.id === lastInterviewerSegment.id,
-        );
         const recentSegments = segments
-          .slice(Math.max(0, lastInterviewerIndex - 7), lastInterviewerIndex + 1)
+          .slice(-7)
           .map((segment) => `[${segment.speaker}] ${segment.text}`)
+          .concat([`[interviewer] ${interviewerTranscript.trim()}`])
           .join('\n');
 
         processTranscript(recentSegments);
       }
-    }, 800);
+    }, COPILOT_TRANSCRIPT_DEBOUNCE_MS);
 
     return () => {
       if (textDebounceRef.current) {
         clearTimeout(textDebounceRef.current);
       }
     };
-  }, [segments, isListening, processTranscript, isProcessing]);
+  }, [interviewerTranscript, segments, isListening, processTranscript, isProcessing]);
 
   const handleStart = useCallback(() => {
     setElapsed(0);
@@ -156,7 +149,6 @@ export default function Interview() {
     resetTranscript();
     clearQuestions();
     setElapsed(0);
-    lastProcessedSegmentIdRef.current = -1;
   }, [stopListening, resetTranscript, clearQuestions]);
 
   const formatTime = (seconds: number) => {

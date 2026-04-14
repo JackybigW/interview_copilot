@@ -1,5 +1,6 @@
 export const LIVE_SEGMENT_FINALIZE_MS = 300;
 export const DUPLICATE_SEGMENT_SUPPRESSION_MS = 20_000;
+const MIN_SPEAKER_SWITCH_CHARS = 6;
 
 export function shouldFinalizeImmediatelyOnProviderFinal({
   isFinal,
@@ -100,6 +101,69 @@ export function getSpeakersToFinalizeOnIncoming(
     (speaker) =>
       speaker !== incomingSpeaker && Boolean(liveTextBySpeaker[speaker]?.trim()),
   );
+}
+
+export function getSpeakersToFinalizeOnStableIncoming({
+  liveTextBySpeaker,
+  incomingSpeaker,
+  incomingText,
+  isFinal = false,
+  providerFinal = false,
+}) {
+  const normalizedIncoming = incomingText.trim();
+  if (!normalizedIncoming) {
+    return [];
+  }
+
+  const canonicalIncoming = canonicalizeTranscriptText(normalizedIncoming);
+  const looksStableBoundary =
+    canonicalIncoming.length >= MIN_SPEAKER_SWITCH_CHARS ||
+    /[.!?。！？]$/.test(normalizedIncoming) ||
+    shouldFinalizeImmediatelyOnProviderFinal({
+      isFinal,
+      providerFinal,
+    });
+
+  if (!looksStableBoundary) {
+    return [];
+  }
+
+  return getSpeakersToFinalizeOnIncoming(liveTextBySpeaker, incomingSpeaker);
+}
+
+export function shouldFinalizeLiveTextOnSpeakerSwitch({
+  speaker,
+  liveText,
+}) {
+  const normalizedLiveText = liveText.trim();
+  if (!normalizedLiveText) {
+    return false;
+  }
+
+  const canonicalLiveText = canonicalizeTranscriptText(normalizedLiveText);
+  if (!canonicalLiveText) {
+    return false;
+  }
+
+  if (/[.!?。！？]$/.test(normalizedLiveText)) {
+    return true;
+  }
+
+  if (
+    speaker === 'interviewer' &&
+    /(?:什么|吗|么|呢|why|how|what|when|where|which|tell me|can you|could you|would you)\s*$/i.test(normalizedLiveText)
+  ) {
+    return true;
+  }
+
+  if (
+    speaker === 'interviewer' &&
+    /(?:第一个|开始聊题|咱开始聊题|先聊|先说|比如|然后|接下来)\s*$/u.test(normalizedLiveText)
+  ) {
+    return false;
+  }
+
+  return canonicalLiveText.length >= 12;
 }
 
 export function getStaleLiveSpeakers(

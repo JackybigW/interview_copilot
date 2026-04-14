@@ -25,7 +25,12 @@ from services.gemini_structured_service import (
     build_concise_context,
     refine_structured_profile,
 )
-from services.gemini_flash_service import generate_answer_stream, GEMINI_FLASH_MODEL
+from services.gemini_flash_service import (
+    generate_answer_stream,
+    detect_question_and_answer_stream,
+    extract_question_from_detected_content,
+    GEMINI_FLASH_MODEL,
+)
 from services.file_parser_service import parse_file
 
 import websockets
@@ -63,6 +68,32 @@ class GenerateAnswerRequest(BaseModel):
     jd_context: str = ""
     transcript_context: str = ""
     language: str = "en"
+
+
+@router.post("/detect-question")
+async def detect_question(request: GenerateAnswerRequest):
+    """Detect a complete interviewer question from recent transcript context."""
+    try:
+        context_parts = []
+        if request.resume_context:
+            context_parts.append(request.resume_context)
+        if request.jd_context:
+            context_parts.append(request.jd_context)
+        context = "\n\n".join(context_parts)
+
+        chunks: list[str] = []
+        async for chunk in detect_question_and_answer_stream(
+            transcript=request.transcript_context,
+            context=context,
+            language=request.language,
+        ):
+            chunks.append(chunk)
+
+        detected_question = extract_question_from_detected_content("".join(chunks))
+        return {"question": detected_question}
+    except Exception as e:
+        logger.error(f"Question detection error: {e}")
+        raise HTTPException(status_code=500, detail=f"Question detection failed: {str(e)}")
 
 
 class RefineAnalysisRequest(BaseModel):
@@ -255,8 +286,10 @@ async def generate_answer(request: GenerateAnswerRequest):
         question_chars = len(request.question)
         context_chars = len(context)
         transcript_chars = len(request.transcript_context)
+        request_type = "generate_answer" if request.question.strip() else "detect_question_and_answer"
         logger.info(
-            "copilot_answer request_type=generate_answer model=%s question_chars=%d context_chars=%d transcript_chars=%d language=%s",
+            "copilot_answer request_type=%s model=%s question_chars=%d context_chars=%d transcript_chars=%d language=%s",
+            request_type,
             GEMINI_FLASH_MODEL,
             question_chars,
             context_chars,
@@ -269,16 +302,26 @@ async def generate_answer(request: GenerateAnswerRequest):
             first_chunk_ms: float | None = None
             chunk_count = 0
             try:
-                async for chunk in generate_answer_stream(
-                    question=request.question,
-                    context=context,
-                    transcript_context=request.transcript_context,
-                    language=request.language,
-                ):
+                if request.question.strip():
+                    stream = generate_answer_stream(
+                        question=request.question,
+                        context=context,
+                        transcript_context=request.transcript_context,
+                        language=request.language,
+                    )
+                else:
+                    stream = detect_question_and_answer_stream(
+                        transcript=request.transcript_context,
+                        context=context,
+                        language=request.language,
+                    )
+
+                async for chunk in stream:
                     if first_chunk_ms is None:
                         first_chunk_ms = (time.perf_counter() - start) * 1000
                         logger.info(
-                            "copilot_answer first_chunk model=%s ttfc_ms=%.1f question_chars=%d context_chars=%d transcript_chars=%d",
+                            "copilot_answer first_chunk request_type=%s model=%s ttfc_ms=%.1f question_chars=%d context_chars=%d transcript_chars=%d",
+                            request_type,
                             GEMINI_FLASH_MODEL,
                             first_chunk_ms,
                             question_chars,
@@ -299,7 +342,8 @@ async def generate_answer(request: GenerateAnswerRequest):
             finally:
                 total_ms = (time.perf_counter() - start) * 1000
                 logger.info(
-                    "copilot_answer complete model=%s total_ms=%.1f ttfc_ms=%s chunks=%d question_chars=%d context_chars=%d transcript_chars=%d",
+                    "copilot_answer complete request_type=%s model=%s total_ms=%.1f ttfc_ms=%s chunks=%d question_chars=%d context_chars=%d transcript_chars=%d",
+                    request_type,
                     GEMINI_FLASH_MODEL,
                     total_ms,
                     f"{first_chunk_ms:.1f}" if first_chunk_ms is not None else "n/a",

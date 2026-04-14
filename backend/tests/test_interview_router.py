@@ -293,8 +293,74 @@ async def test_generate_answer_logs_stream_timing(monkeypatch, caplog):
         "data: [DONE]\n\n",
     ]
     assert "copilot_answer request_type=generate_answer model=gemini-3-flash-preview" in caplog.text
-    assert "copilot_answer first_chunk model=gemini-3-flash-preview" in caplog.text
-    assert "copilot_answer complete model=gemini-3-flash-preview" in caplog.text
+    assert "copilot_answer first_chunk request_type=generate_answer model=gemini-3-flash-preview" in caplog.text
+    assert "copilot_answer complete request_type=generate_answer model=gemini-3-flash-preview" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_detects_question_from_transcript_when_question_is_empty(monkeypatch, caplog):
+    import routers.interview as interview
+
+    caplog.set_level(logging.INFO)
+
+    async def fake_detect_stream(*, transcript, context, language):
+        assert transcript == "[interviewer] 你最大的缺点是什么？"
+        assert context == "resume\n\njd"
+        assert language == "zh"
+        yield "[QUESTION]: 你最大的缺点是什么？"
+        yield "[ANSWER]: 我会诚实回答。"
+
+    monkeypatch.setattr(interview, "detect_question_and_answer_stream", fake_detect_stream)
+
+    response = await interview.generate_answer(
+        interview.GenerateAnswerRequest(
+            question="",
+            resume_context="resume",
+            jd_context="jd",
+            transcript_context="[interviewer] 你最大的缺点是什么？",
+            language="zh",
+        )
+    )
+
+    chunks = []
+    async for chunk in response.body_iterator:
+        if isinstance(chunk, bytes):
+            chunks.append(chunk.decode())
+        else:
+            chunks.append(chunk)
+
+    assert chunks == [
+        "data: [QUESTION]: 你最大的缺点是什么？\n\n",
+        "data: [ANSWER]: 我会诚实回答。\n\n",
+        "data: [DONE]\n\n",
+    ]
+    assert "copilot_answer request_type=detect_question_and_answer model=gemini-3-flash-preview" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_detect_question_returns_only_question_text(monkeypatch):
+    import routers.interview as interview
+
+    async def fake_detect_stream(*, transcript, context, language):
+        assert transcript == "[interviewer] 你最大的缺点是什么？"
+        assert context == "resume\n\njd"
+        assert language == "zh"
+        yield "[QUESTION]: 你最大的缺点是什么？"
+        yield "[ANSWER]: 我会诚实回答。"
+
+    monkeypatch.setattr(interview, "detect_question_and_answer_stream", fake_detect_stream)
+
+    response = await interview.detect_question(
+        interview.GenerateAnswerRequest(
+            question="",
+            resume_context="resume",
+            jd_context="jd",
+            transcript_context="[interviewer] 你最大的缺点是什么？",
+            language="zh",
+        )
+    )
+
+    assert response == {"question": "你最大的缺点是什么？"}
 
 
 @pytest.mark.asyncio

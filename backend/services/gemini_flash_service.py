@@ -16,6 +16,23 @@ logger = logging.getLogger(__name__)
 GEMINI_FLASH_MODEL = os.getenv("GEMINI_FLASH_MODEL", "gemini-3-flash-preview")
 
 
+def extract_question_from_detected_content(content: str) -> str:
+    """Extract just the detected question text from a tagged Gemini response."""
+    trimmed = content.strip()
+    if not trimmed or "[NO_QUESTION]" in trimmed:
+        return ""
+
+    question_start = trimmed.find("[QUESTION]:")
+    if question_start == -1:
+        return ""
+
+    answer_start = trimmed.find("[ANSWER]:", question_start)
+    if answer_start == -1:
+        return trimmed[question_start + len("[QUESTION]:") :].strip()
+
+    return trimmed[question_start + len("[QUESTION]:") : answer_start].strip()
+
+
 @lru_cache(maxsize=1)
 def _get_client() -> genai.Client:
     """Get a Google GenAI client."""
@@ -53,20 +70,17 @@ async def generate_answer_stream(
         "Based on the candidate's background and the job requirements, provide a concise, directly usable interview answer.\n\n"
         "Rules:\n"
         "- The candidate must be able to read this during the interview immediately\n"
-        "- Start with 3-4 bullet points of the key ideas only\n"
-        "- Then write a short verbatim script the candidate can say out loud naturally\n"
-        "- Keep the verbatim script to 3-5 spoken sentences\n"
+        "- Keep the answer concise and directly usable in a real interview\n"
+        "- Answer in 3-4 short spoken sentences max\n"
+        "- Each sentence should be concrete, defensible, and relevant to the question\n"
         "- Use the STAR method for behavioral questions when helpful\n"
         "- Reference specific experiences from the resume when relevant\n"
         "- Align answers with the job requirements\n"
-        "- Sound natural, confident, and conversational, not like advice to the candidate\n"
+        "- Write in first person, as if you are the candidate speaking directly\n"
+        "- Sound like a strong big-tech interview candidate: clear, structured, calm, and credible\n"
         "- Do not explain strategy, do not say 'you can say', and do not give meta commentary\n"
-        "- Use this exact structure:\n"
-        "  Key points:\n"
-        "  - ...\n"
-        "  - ...\n"
-        "  Script:\n"
-        "  ...\n"
+        "- Do not output markdown bullets, numbered lists, titles, or section headers\n"
+        "- Output only the final answer the candidate should read"
         f"{lang_instruction}"
     )
 
@@ -125,16 +139,33 @@ async def detect_question_and_answer_stream(
         "When given a transcript, you must:\n"
         "1. Focus on what the INTERVIEWER said. Determine if the interviewer has asked a new question.\n"
         "2. If a question is detected, respond in this exact format:\n"
-        "   [QUESTION]: <the detected question>\n"
-        "   [ANSWER]: <a concise, professional answer>\n\n"
+        "   [QUESTION]: <the detected question only>\n"
+        "   [ANSWER]: <the full candidate answer>\n\n"
         "3. If no clear question is detected, respond with:\n"
         "   [NO_QUESTION]\n\n"
-        "Rules for answers:\n"
-        "- Be concise but thorough (3-6 sentences max)\n"
-        "- Use the STAR method for behavioral questions\n"
+        "Rules for question detection:\n"
+        "- The detected question must contain only the interviewer's actual question text\n"
+        "- Do not include any answer content in [QUESTION]\n"
+        "- Ignore warm-up chatter, fillers, and incomplete lead-ins\n"
+        "- Return [NO_QUESTION] until the interviewer has asked a valid, complete question\n\n"
+        "Rules for the answer:\n"
+        "- The candidate must be able to read this during the interview immediately\n"
+        "- Start with exactly 3 bullet points of the key ideas only\n"
+        "- Then write a full spoken transcript the candidate can say out loud naturally\n"
+        "- Keep the spoken transcript to 3-5 spoken sentences\n"
+        "- Use the STAR method for behavioral questions when helpful\n"
         "- Reference specific experiences from the resume when relevant\n"
-        "- Sound natural, not robotic\n"
-        "- Focus on key points the candidate should mention"
+        "- Align answers with the job requirements\n"
+        "- Write in first person, as if you are the candidate speaking directly\n"
+        "- Sound natural, confident, and conversational, not like advice to the candidate\n"
+        "- Do not explain strategy, do not say 'you can say', and do not give meta commentary\n"
+        "- In [ANSWER], use this exact structure:\n"
+        "  Key points:\n"
+        "  - ...\n"
+        "  - ...\n"
+        "  - ...\n"
+        "  Script:\n"
+        "  ..."
         f"{lang_instruction}"
     )
 

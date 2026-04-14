@@ -5,9 +5,11 @@ import {
   canonicalizeTranscriptText,
   DUPLICATE_SEGMENT_SUPPRESSION_MS,
   getSpeakersToFinalizeOnIncoming,
+  getSpeakersToFinalizeOnStableIncoming,
   getFinalizeDelayMs,
   getStaleLiveSpeakers,
   LIVE_SEGMENT_FINALIZE_MS,
+  shouldFinalizeLiveTextOnSpeakerSwitch,
   stripCommittedPrefixFromSnapshot,
   shouldFinalizeImmediatelyOnProviderFinal,
   shouldIgnoreIncomingSnapshot,
@@ -34,6 +36,54 @@ test('does not finalize anything when the same speaker keeps talking', () => {
   assert.deepEqual(
     getSpeakersToFinalizeOnIncoming(liveTextBySpeaker, 'interviewer'),
     [],
+  );
+});
+
+test('does not finalize the previous speaker when the new speaker only has a tiny chunk', () => {
+  assert.deepEqual(
+    getSpeakersToFinalizeOnStableIncoming({
+      liveTextBySpeaker: {
+        user: '',
+        interviewer: '你最大的缺点是什么',
+      },
+      incomingSpeaker: 'user',
+      incomingText: '嗯',
+    }),
+    [],
+  );
+});
+
+test('finalizes the previous speaker when the new speaker has a stable utterance', () => {
+  assert.deepEqual(
+    getSpeakersToFinalizeOnStableIncoming({
+      liveTextBySpeaker: {
+        user: '',
+        interviewer: '你最大的缺点是什么',
+      },
+      incomingSpeaker: 'user',
+      incomingText: 'ok 目前识别没什么问题',
+    }),
+    ['interviewer'],
+  );
+});
+
+test('does not switch-finalize an incomplete interviewer lead-in', () => {
+  assert.equal(
+    shouldFinalizeLiveTextOnSpeakerSwitch({
+      speaker: 'interviewer',
+      liveText: '开始聊题，第一个',
+    }),
+    false,
+  );
+});
+
+test('switch-finalizes a question-like interviewer utterance without punctuation', () => {
+  assert.equal(
+    shouldFinalizeLiveTextOnSpeakerSwitch({
+      speaker: 'interviewer',
+      liveText: '你最大的缺点是什么',
+    }),
+    true,
   );
 });
 
